@@ -92,12 +92,21 @@ class PromptEncoder(nn.Module):
         point_embedding = self.pe_layer.forward_with_coords(
             points, self.input_image_size
         )
-        point_embedding[labels == -1] = 0.0
-        point_embedding[labels == -1] += self.not_a_point_embed.weight
-        point_embedding[labels == 0] += self.point_embeddings[0].weight
-        point_embedding[labels == 1] += self.point_embeddings[1].weight
-        point_embedding[labels == 2] += self.point_embeddings[2].weight
-        point_embedding[labels == 3] += self.point_embeddings[3].weight
+
+        mask_not_a_point = (labels == -1).float().unsqueeze(-1)
+        mask_label_0 = (labels == 0).float().unsqueeze(-1)
+        mask_label_1 = (labels == 1).float().unsqueeze(-1)
+        mask_label_2 = (labels == 2).float().unsqueeze(-1)
+        mask_label_3 = (labels == 3).float().unsqueeze(-1)
+        
+        point_embedding = (
+            point_embedding * (1 - mask_not_a_point) +  
+            self.not_a_point_embed.weight * mask_not_a_point +
+            self.point_embeddings[0].weight * mask_label_0 +
+            self.point_embeddings[1].weight * mask_label_1 +
+            self.point_embeddings[2].weight * mask_label_2 +
+            self.point_embeddings[3].weight * mask_label_3
+        )
         return point_embedding
 
     def _embed_boxes(self, boxes: torch.Tensor) -> torch.Tensor:
@@ -180,3 +189,11 @@ class PromptEncoder(nn.Module):
             )
 
         return sparse_embeddings, dense_embeddings
+
+    def points_only(
+        self,
+        points: Tuple[torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor:
+        coords, labels = points
+        point_embeddings = self._embed_points(coords, labels, pad=True)
+        return point_embeddings

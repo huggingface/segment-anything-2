@@ -151,6 +151,17 @@ class SAM2ImagePredictor:
             return image_embed 
 
     @torch.no_grad()
+    def encode_points_prompt(self, unnorm_coords: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        concat_points = (unnorm_coords, labels)
+        with torch.no_grad():
+            for _, param in self.model.named_parameters():
+                if param.requires_grad:
+                    param.requires_grad = False
+            sparse_embeddings = self.model.sam_prompt_encoder.points_only(points=concat_points)
+            return sparse_embeddings
+
+
+    @torch.no_grad()
     def set_image_batch(
         self,
         image_list: List[Union[np.ndarray]],
@@ -309,6 +320,10 @@ class SAM2ImagePredictor:
         mask_input, unnorm_coords, labels, unnorm_box = self._prep_prompts(
             point_coords, point_labels, box, mask_input, normalize_coords
         )
+
+        print("After preparing prompts")
+        print(unnorm_coords)
+        print(labels)
 
         masks, iou_predictions, low_res_masks = self._predict(
             unnorm_coords,

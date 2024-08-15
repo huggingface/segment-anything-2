@@ -205,6 +205,7 @@ class SAM2Base(torch.nn.Module):
 
         # build PromptEncoder and MaskDecoder from SAM
         # (their hyperparameters like `mask_in_chans=16` are from SAM code)
+
         self.sam_prompt_encoder = PromptEncoder(
             embed_dim=self.sam_prompt_embed_dim,
             image_embedding_size=(

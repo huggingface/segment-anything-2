@@ -79,7 +79,6 @@ def upsample_bicubic2d(context, node):
 class SAM2ImageEmbedder(torch.nn.Module):
     def __init__(self, model: SAM2ImagePredictor):
         super().__init__()
-        print(model)
         self.model = model
     
     @torch.no_grad()
@@ -87,33 +86,29 @@ class SAM2ImageEmbedder(torch.nn.Module):
         img_embedding = self.model.generate_image_embedding(image)
         return img_embedding
 
-def export(output_dir: str, variant: SAM2Variant, points: list, labels: list, min_deployment_target: AvailableTarget, compute_units: ComputeUnit):
-    os.makedirs(output_dir, exist_ok=True)
-
-    device = torch.device("cpu")
-    print(f"using device: {device}")
+class SAM2PromptEncoder(torch.nn.Module):
+    def __init__(self, model: SAM2ImagePredictor):
+        super().__init__()
+        self.model = model
     
-    # Build SAM2 model
-    sam2_checkpoint = f"/Users/fleetwood/Code/segment-anything-2/checkpoints/sam2_hiera_small.pt"
-    model_cfg = "sam2_hiera_s.yaml"
+    @torch.no_grad()
+    def forward(self, points, labels):
+        prompt_embedding = self.model.encode_points_prompt(points, labels)
+        return prompt_embedding 
 
+def export_image_embedder(image_predictor: SAM2ImagePredictor, output_dir: str, min_deployment_target: AvailableTarget, compute_units: ComputeUnit):
     # Prepare input tensors
     image = Image.open('notebooks/images/truck.jpg')
     image = np.array(image.convert("RGB"))
 
-    with torch.no_grad():
-        model = build_sam2(model_cfg, sam2_checkpoint, device=device)
-        img_predictor = SAM2ImagePredictor(model)
-        prepared_images = img_predictor._transforms(image)
-        prepared_images = prepared_images[None, ...].to(device)
-        sam2 = SAM2ImageEmbedder(img_predictor)
-        sam2.eval()
-    
+    prepared_images = image_predictor._transforms(image)
+    prepared_images = prepared_images[None, ...].to("cpu")
+    sam2 = SAM2ImageEmbedder(image_predictor)
     
     # Trace the model
     traced_model = torch.jit.trace(sam2, prepared_images)
     
-    output_path = os.path.join(output_dir, f"sam2_image_embedder_{variant.value}")
+    output_path = os.path.join(output_dir, f"sam2_image_embedder")
     pt_name = output_path + ".pt"
     traced_model.save(pt_name)
     
@@ -121,7 +116,7 @@ def export(output_dir: str, variant: SAM2Variant, points: list, labels: list, mi
     mlmodel = ct.convert(
         traced_model,
         inputs=[
-            ct.TensorType(name="image", shape=(1, 3, 1024, 1024)),
+            ct.TensorType(name="image", shape=(1,3,1024,1024)),
         ],
         outputs=[
             ct.TensorType(name="embedding"),
@@ -132,6 +127,68 @@ def export(output_dir: str, variant: SAM2Variant, points: list, labels: list, mi
     
     # Save the CoreML model
     mlmodel.save(output_path + ".mlpackage")
+
+def export_prompt_encoder(image_predictor: SAM2ImagePredictor, points: list, labels: list, output_dir: str, min_deployment_target: AvailableTarget, compute_units: ComputeUnit):
+    image_predictor.model.sam_prompt_encoder.eval()
+
+    points = torch.tensor(points, dtype=torch.float32)
+    labels = torch.tensor(labels, dtype=torch.int32)
+
+    unnorm_coords = image_predictor._transforms.transform_coords(
+        points, normalize=True, orig_hw=(1200, 1800)
+    )
+    if len(unnorm_coords.shape) == 2:
+        unnorm_coords, labels = unnorm_coords[None, ...], labels[None, ...]
+
+    print(unnorm_coords)
+
+    sam2 = SAM2PromptEncoder(image_predictor)
+
+    # Trace the model
+    traced_model = torch.jit.trace(sam2, (unnorm_coords, labels))
+    
+    output_path = os.path.join(output_dir, f"sam2_prompt_encoder")
+    pt_name = output_path + ".pt"
+    traced_model.save(pt_name)
+
+    #points_shapes = ct.EnumeratedShapes(shapes=[[1, i, 2] for i in range(1, 16)])
+    #labels_shapes = ct.EnumeratedShapes(shapes=[[1, i] for i in range(1, 16)])
+
+    points_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16), 2))
+    labels_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16)))
+
+    # Convert to CoreML
+    mlmodel = ct.convert(
+        traced_model,
+        inputs=[
+            ct.TensorType(name="points", shape=points_shape),
+            ct.TensorType(name="labels", shape=labels_shape),
+        ],
+        outputs=[
+            ct.TensorType(name="embedding"),
+        ],
+        minimum_deployment_target=min_deployment_target,
+        compute_units=compute_units,
+    )
+    
+    # Save the CoreML model
+    mlmodel.save(output_path + ".mlpackage")
+
+def export(output_dir: str, variant: SAM2Variant, points: list, labels: list, min_deployment_target: AvailableTarget, compute_units: ComputeUnit):
+    os.makedirs(output_dir, exist_ok=True)
+    device = torch.device("cpu")
+
+    # Build SAM2 model
+    sam2_checkpoint = f"/Users/fleetwood/Code/segment-anything-2/checkpoints/sam2_hiera_small.pt"
+    model_cfg = "sam2_hiera_s.yaml"
+
+    with torch.no_grad():
+        model = build_sam2(model_cfg, sam2_checkpoint, device=device)
+        img_predictor = SAM2ImagePredictor(model)
+        img_predictor.model.eval()
+
+    #export_image_embedder(img_predictor, output_dir, min_deployment_target, compute_units)
+    export_prompt_encoder(img_predictor, points, labels, output_dir, min_deployment_target, compute_units)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

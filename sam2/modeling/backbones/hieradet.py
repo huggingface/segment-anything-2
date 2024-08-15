@@ -267,7 +267,7 @@ class Hiera(nn.Module):
         window_embed = self.pos_embed_window
         pos_embed = F.interpolate(self.pos_embed, size=(h, w), mode="bicubic")
         tiles = [x // y for x, y in zip(pos_embed.shape, window_embed.shape)]
-        tiles = [1,1,32,32]
+        #tiles = [1,1,32,32]
         warnings.warn(f"CoreML has a bug with dynamic tiles, hardcoding to {tiles}")
         pos_embed = pos_embed + window_embed.tile(tiles)
         pos_embed = pos_embed.permute(0, 2, 3, 1)
