@@ -129,6 +129,28 @@ class SAM2ImagePredictor:
         logging.info("Image embeddings computed.")
 
     @torch.no_grad()
+    def generate_image_embedding(self, input_image: torch.Tensor): 
+        self.model.eval()
+        with torch.no_grad():
+            for _, param in self.model.named_parameters():
+                if param.requires_grad:
+                    param.requires_grad = False
+
+            backbone_out = self.model.forward_image(input_image)
+
+            _, vision_feats, _, _ = self.model._prepare_backbone_features(backbone_out)
+
+            feats = [
+                feat.permute(1, 2, 0).view(1, -1, *feat_size)
+                for feat, feat_size in zip(vision_feats[::-1], self._bb_feat_sizes[::-1])
+            ][::-1]
+
+            image_embed = feats[-1]
+            high_res_feats = feats[:-1]
+
+            return image_embed 
+
+    @torch.no_grad()
     def set_image_batch(
         self,
         image_list: List[Union[np.ndarray]],

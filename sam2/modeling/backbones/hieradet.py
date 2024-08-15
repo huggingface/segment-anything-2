@@ -18,7 +18,7 @@ from sam2.modeling.backbones.utils import (
 )
 
 from sam2.modeling.sam2_utils import DropPath, MLP
-
+import warnings
 
 def do_pool(x: torch.Tensor, pool: nn.Module, norm: nn.Module = None) -> torch.Tensor:
     if pool is None:
@@ -266,9 +266,10 @@ class Hiera(nn.Module):
         h, w = hw
         window_embed = self.pos_embed_window
         pos_embed = F.interpolate(self.pos_embed, size=(h, w), mode="bicubic")
-        pos_embed = pos_embed + window_embed.tile(
-            [x // y for x, y in zip(pos_embed.shape, window_embed.shape)]
-        )
+        tiles = [x // y for x, y in zip(pos_embed.shape, window_embed.shape)]
+        tiles = [1,1,32,32]
+        warnings.warn(f"CoreML has a bug with dynamic tiles, hardcoding to {tiles}")
+        pos_embed = pos_embed + window_embed.tile(tiles)
         pos_embed = pos_embed.permute(0, 2, 3, 1)
         return pos_embed
 
