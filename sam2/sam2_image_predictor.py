@@ -129,7 +129,7 @@ class SAM2ImagePredictor:
         logging.info("Image embeddings computed.")
 
     @torch.no_grad()
-    def generate_image_embedding(self, input_image: torch.Tensor): 
+    def generate_image_embedding(self, input_image: torch.Tensor):
         self.model.eval()
         with torch.no_grad():
             for _, param in self.model.named_parameters():
@@ -142,24 +142,31 @@ class SAM2ImagePredictor:
 
             feats = [
                 feat.permute(1, 2, 0).view(1, -1, *feat_size)
-                for feat, feat_size in zip(vision_feats[::-1], self._bb_feat_sizes[::-1])
+                for feat, feat_size in zip(
+                    vision_feats[::-1], self._bb_feat_sizes[::-1]
+                )
             ][::-1]
 
             image_embed = feats[-1]
             high_res_feats = feats[:-1]
+            assert len(high_res_feats) == 2
 
-            return image_embed 
+            feats_s0, feats_s1 = high_res_feats[0], high_res_feats[1]
+            return (image_embed, feats_s0, feats_s1)
 
     @torch.no_grad()
-    def encode_points_prompt(self, unnorm_coords: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def encode_points_prompt(
+        self, unnorm_coords: torch.Tensor, labels: torch.Tensor
+    ) -> torch.Tensor:
         concat_points = (unnorm_coords, labels)
         with torch.no_grad():
             for _, param in self.model.named_parameters():
                 if param.requires_grad:
                     param.requires_grad = False
-            sparse_embeddings = self.model.sam_prompt_encoder.points_only(points=concat_points)
+            sparse_embeddings = self.model.sam_prompt_encoder.points_only(
+                points=concat_points
+            )
             return sparse_embeddings
-
 
     @torch.no_grad()
     def set_image_batch(
@@ -342,7 +349,6 @@ class SAM2ImagePredictor:
     def _prep_prompts(
         self, point_coords, point_labels, box, mask_logits, normalize_coords, img_idx=-1
     ):
-
         unnorm_coords, labels, unnorm_box, mask_input = None, None, None, None
         if point_coords is not None:
             assert (

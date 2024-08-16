@@ -98,14 +98,14 @@ class PromptEncoder(nn.Module):
         mask_label_1 = (labels == 1).float().unsqueeze(-1)
         mask_label_2 = (labels == 2).float().unsqueeze(-1)
         mask_label_3 = (labels == 3).float().unsqueeze(-1)
-        
+
         point_embedding = (
-            point_embedding * (1 - mask_not_a_point) +  
-            self.not_a_point_embed.weight * mask_not_a_point +
-            self.point_embeddings[0].weight * mask_label_0 +
-            self.point_embeddings[1].weight * mask_label_1 +
-            self.point_embeddings[2].weight * mask_label_2 +
-            self.point_embeddings[3].weight * mask_label_3
+            point_embedding * (1 - mask_not_a_point)
+            + self.not_a_point_embed.weight * mask_not_a_point
+            + self.point_embeddings[0].weight * mask_label_0
+            + self.point_embeddings[1].weight * mask_label_1
+            + self.point_embeddings[2].weight * mask_label_2
+            + self.point_embeddings[3].weight * mask_label_3
         )
         return point_embedding
 
