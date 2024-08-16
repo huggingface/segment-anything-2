@@ -9,3 +9,4 @@ _C.*
 outputs/*
 checkpoints/*.pt
 **/*.mlpackage
+**/*.npy

@@ -3,7 +3,7 @@
 
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
+import os
 import logging
 
 from typing import List, Optional, Tuple, Union
@@ -126,19 +126,34 @@ class SAM2ImagePredictor:
         ][::-1]
         self._features = {"image_embed": feats[-1], "high_res_feats": feats[:-1]}
         self._is_image_set = True
+
+        serialize_ground = os.environ.get("SERIALIZE_GROUND", False)
+        if serialize_ground:
+            image_embed = self._features["image_embed"].cpu().numpy()
+            high_res_feats = self._features["high_res_feats"]
+            feats_s0 = high_res_feats[0].cpu().numpy()
+            feats_s1 = high_res_feats[1].cpu().numpy()
+
+            np.save("image_embed.npy", image_embed)
+            np.save("feats_s0.npy", feats_s0)
+            np.save("feats_s1.npy", feats_s1)
+
         logging.info("Image embeddings computed.")
 
     @torch.no_grad()
-    def encode_image_raw(self, input_image: torch.Tensor):
+    def encode_image_raw(self, prepared_image: torch.Tensor):
         self.model.eval()
         with torch.no_grad():
             for _, param in self.model.named_parameters():
                 if param.requires_grad:
                     param.requires_grad = False
 
-            backbone_out = self.model.forward_image(input_image)
+            backbone_out = self.model.forward_image(prepared_image)
 
             _, vision_feats, _, _ = self.model._prepare_backbone_features(backbone_out)
+
+            if self.model.directly_add_no_mem_embed:
+                vision_feats[-1] = vision_feats[-1] + self.model.no_mem_embed
 
             feats = [
                 feat.permute(1, 2, 0).view(1, -1, *feat_size)
@@ -166,7 +181,6 @@ class SAM2ImagePredictor:
             (sparse_embeddings, dense_embeddings) = (
                 self.model.sam_prompt_encoder.points_only(points=concat_points)
             )
-            print("DENSE SHAPE: ", dense_embeddings.shape)
             return (sparse_embeddings, dense_embeddings)
 
     @torch.no_grad()

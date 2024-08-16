@@ -1,16 +1,20 @@
 import argparse
 import os
 import ast
-import coremltools as ct
 import torch
-from coremltools.converters.mil._deployment_compatibility import AvailableTarget
-from coremltools import ComputeUnit
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-from PIL import Image
+from typing import List, Tuple
 import numpy as np
 import enum
-from typing import List
+from PIL import Image
+
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+import coremltools as ct
+from coremltools.converters.mil._deployment_compatibility import AvailableTarget
+from coremltools import ComputeUnit
+from coremltools.converters.mil import register_torch_op
+from coremltools.converters.mil.mil import Builder as mb
 
 
 class SAM2Variant(enum.Enum):
@@ -18,6 +22,13 @@ class SAM2Variant(enum.Enum):
     Small = "small"
     BasePlus = "base_plus"
     Large = "large"
+
+    def cfg(self):
+        match self:
+            case SAM2Variant.BasePlus:
+                return "sam2_hiera_b+.yaml"
+            case _:
+                return f"sam2_hiera_{self.value[0]}.yaml"
 
 
 def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -63,10 +74,6 @@ def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     return parser
 
 
-from coremltools.converters.mil import register_torch_op
-from coremltools.converters.mil.mil import Builder as mb
-
-
 @register_torch_op
 def upsample_bicubic2d(context, node):
     x = context[node.inputs[0]]
@@ -75,11 +82,12 @@ def upsample_bicubic2d(context, node):
     scale_factor_height = output_size[0] / x.shape[2]
     scale_factor_width = output_size[1] / x.shape[3]
 
-    # align_corners = context[node.inputs[2]].val #false anyway
+    align_corners = context[node.inputs[2]].val
     x = mb.upsample_bilinear(
         x=x,
         scale_factor_height=scale_factor_height,
         scale_factor_width=scale_factor_width,
+        align_corners=align_corners,
         name=node.name,
     )
     context.add(x)
@@ -94,6 +102,33 @@ class SAM2ImageEncoder(torch.nn.Module):
     def forward(self, image):
         (img_embedding, feats_s0, feats_s1) = self.model.encode_image_raw(image)
         return img_embedding, feats_s0, feats_s1
+
+
+def validate_image_encoder(model: ct.models.MLModel, prepared_image: np.ndarray):
+    predictions = model.predict({"image": prepared_image})
+
+    ground_embedding = np.load("notebooks/image_embed.npy")
+    ground_feats_s0 = np.load("notebooks/feats_s0.npy")
+    ground_feats_s1 = np.load("notebooks/feats_s1.npy")
+
+    img_max_diff = np.max(np.abs(predictions["image_embedding"] - ground_embedding))
+    img_avg_diff = np.mean(np.abs(predictions["image_embedding"] - ground_embedding))
+
+    s0_max_diff = np.max(np.abs(predictions["feats_s0"] - ground_feats_s0))
+    s0_avg_diff = np.mean(np.abs(predictions["feats_s0"] - ground_feats_s0))
+
+    s1_max_diff = np.max(np.abs(predictions["feats_s1"] - ground_feats_s1))
+    s1_avg_diff = np.mean(np.abs(predictions["feats_s1"] - ground_feats_s1))
+
+    print(
+        f"Image Embedding: Max Diff: {img_max_diff:.4f}, Avg Diff: {img_avg_diff:.4f}"
+    )
+    print(f"Feats S0: Max Diff: {s0_max_diff:.4f}, Avg Diff: {s0_avg_diff:.4f}")
+    print(f"Feats S1: Max Diff: {s1_max_diff:.4f}, Avg Diff: {s1_avg_diff:.4f}")
+
+    # assert np.allclose(predictions["image_embedding"], ground_embedding, atol=1e-4)
+    # assert np.allclose(predictions["feats_s0"], ground_feats_s0, atol=1e-4)
+    # assert np.allclose(predictions["feats_s1"], ground_feats_s1, atol=1e-4)
 
 
 class SAM2PromptEncoder(torch.nn.Module):
@@ -124,21 +159,22 @@ class SAM2MaskDecoder(torch.nn.Module):
 
 def export_image_encoder(
     image_predictor: SAM2ImagePredictor,
+    variant: SAM2Variant,
     output_dir: str,
     min_target: AvailableTarget,
     compute_units: ComputeUnit,
-):
+) -> Tuple[int, int]:
     # Prepare input tensors
     image = Image.open("notebooks/images/truck.jpg")
     image = np.array(image.convert("RGB"))
+    orig_hw = (image.shape[0], image.shape[1]) 
 
     prepared_images = image_predictor._transforms(image)
     prepared_images = prepared_images[None, ...].to("cpu")
-    sam2 = SAM2ImageEncoder(image_predictor)
 
-    traced_model = torch.jit.trace(sam2, prepared_images)
+    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor), prepared_images)
 
-    output_path = os.path.join(output_dir, f"sam2_image_embedder")
+    output_path = os.path.join(output_dir, f"sam2_{variant.value}_image_encoder")
 
     mlmodel = ct.convert(
         traced_model,
@@ -154,14 +190,18 @@ def export_image_encoder(
         compute_units=compute_units,
     )
 
-    # Save the CoreML model
+    validate_image_encoder(mlmodel, prepared_images)
+
     mlmodel.save(output_path + ".mlpackage")
+    return orig_hw
 
 
 def export_prompt_encoder(
     image_predictor: SAM2ImagePredictor,
+    variant: SAM2Variant,
     input_points: List[List[float]],
     input_labels: List[int],
+    orig_hw: tuple,
     output_dir: str,
     min_target: AvailableTarget,
     compute_units: ComputeUnit,
@@ -172,23 +212,19 @@ def export_prompt_encoder(
     labels = torch.tensor(input_labels, dtype=torch.int32)
 
     unnorm_coords = image_predictor._transforms.transform_coords(
-        points,
-        normalize=True,
-        orig_hw=(1200, 1800),  # todo: avoid hardcoding truck.jpg
+        points, normalize=True, orig_hw=orig_hw,  # todo: avoid hardcoding truck.jpg
     )
     unnorm_coords, labels = unnorm_coords[None, ...], labels[None, ...]
 
-    sam2 = SAM2PromptEncoder(image_predictor)
+    traced_model = torch.jit.trace(
+        SAM2PromptEncoder(image_predictor), (unnorm_coords, labels)
+    )
 
-    # Trace the model
-    traced_model = torch.jit.trace(sam2, (unnorm_coords, labels))
-
-    output_path = os.path.join(output_dir, f"sam2_prompt_encoder")
+    output_path = os.path.join(output_dir, f"sam2_{variant.value}_prompt_encoder")
 
     points_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16), 2))
     labels_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16)))
 
-    # Convert to CoreML
     mlmodel = ct.convert(
         traced_model,
         inputs=[
@@ -209,6 +245,7 @@ def export_prompt_encoder(
 
 def export_mask_decoder(
     image_predictor: SAM2ImagePredictor,
+    variant: SAM2Variant,
     output_dir: str,
     min_target: AvailableTarget,
     compute_units: ComputeUnit,
@@ -226,7 +263,7 @@ def export_mask_decoder(
     )
     traced_model.eval()
 
-    output_path = os.path.join(output_dir, f"sam2_mask_decoder")
+    output_path = os.path.join(output_dir, f"sam2_{variant.value}_mask_decoder")
 
     # Convert to CoreML
     mlmodel = ct.convert(
@@ -264,21 +301,19 @@ def export(
     device = torch.device("cpu")
 
     # Build SAM2 model
-    sam2_checkpoint = (
-        f"/Users/fleetwood/Code/segment-anything-2/checkpoints/sam2_hiera_tiny.pt"
-    )
-    model_cfg = "sam2_hiera_t.yaml"
+    sam2_checkpoint = f"./checkpoints/sam2_hiera_{variant.value}.pt"
+    model_cfg = variant.cfg()
 
     with torch.no_grad():
         model = build_sam2(model_cfg, sam2_checkpoint, device=device)
         img_predictor = SAM2ImagePredictor(model)
         img_predictor.model.eval()
 
-    export_image_encoder(img_predictor, output_dir, min_target, compute_units)
-    export_prompt_encoder(
-        img_predictor, points, labels, output_dir, min_target, compute_units
-    )
-    export_mask_decoder(img_predictor, output_dir, min_target, compute_units)
+    orig_hw = export_image_encoder(img_predictor, variant, output_dir, min_target, compute_units)
+    # export_prompt_encoder(
+    #    img_predictor, variant, points, labels, orig_hw, output_dir, min_target, compute_units
+    # )
+    # export_mask_decoder(img_predictor,variant, output_dir, min_target, compute_units)
 
 
 if __name__ == "__main__":
