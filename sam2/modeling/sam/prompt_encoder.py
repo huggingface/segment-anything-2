@@ -197,8 +197,8 @@ class PromptEncoder(nn.Module):
         coords, labels = points
         sparse_embeddings = self._embed_points(coords, labels, pad=True)
 
-        bs = points[0].shape[0] 
+        bs = points[0].shape[0]
         dense_embeddings = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
             bs, -1, self.image_embedding_size[0], self.image_embedding_size[1]
         )
-        return sparse_embeddings, dense_embeddings 
+        return sparse_embeddings, dense_embeddings

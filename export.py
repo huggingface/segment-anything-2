@@ -106,20 +106,26 @@ class SAM2PromptEncoder(torch.nn.Module):
         prompt_embedding = self.model.encode_points_raw(points, labels)
         return prompt_embedding
 
+
 class SAM2MaskDecoder(torch.nn.Module):
     def __init__(self, model: SAM2ImagePredictor):
         super().__init__()
         self.model = model
 
     @torch.no_grad()
-    def forward(self, image_embedding, sparse_embedding, dense_embedding, feats_s0, feats_s1):
-        low_res_masks = self.model.decode_masks_raw(image_embedding, sparse_embedding, dense_embedding, [feats_s0, feats_s1])
-        return low_res_masks 
+    def forward(
+        self, image_embedding, sparse_embedding, dense_embedding, feats_s0, feats_s1
+    ):
+        low_res_masks = self.model.decode_masks_raw(
+            image_embedding, sparse_embedding, dense_embedding, [feats_s0, feats_s1]
+        )
+        return low_res_masks
+
 
 def export_image_encoder(
     image_predictor: SAM2ImagePredictor,
     output_dir: str,
-    min_deployment_target: AvailableTarget,
+    min_target: AvailableTarget,
     compute_units: ComputeUnit,
 ):
     # Prepare input tensors
@@ -133,8 +139,6 @@ def export_image_encoder(
     traced_model = torch.jit.trace(sam2, prepared_images)
 
     output_path = os.path.join(output_dir, f"sam2_image_embedder")
-    pt_name = output_path + ".pt"
-    traced_model.save(pt_name)
 
     mlmodel = ct.convert(
         traced_model,
@@ -146,7 +150,7 @@ def export_image_encoder(
             ct.TensorType(name="feats_s0"),
             ct.TensorType(name="feats_s1"),
         ],
-        minimum_deployment_target=min_deployment_target,
+        minimum_deployment_target=min_target,
         compute_units=compute_units,
     )
 
@@ -159,7 +163,7 @@ def export_prompt_encoder(
     input_points: List[List[float]],
     input_labels: List[int],
     output_dir: str,
-    min_deployment_target: AvailableTarget,
+    min_target: AvailableTarget,
     compute_units: ComputeUnit,
 ):
     image_predictor.model.sam_prompt_encoder.eval()
@@ -180,8 +184,6 @@ def export_prompt_encoder(
     traced_model = torch.jit.trace(sam2, (unnorm_coords, labels))
 
     output_path = os.path.join(output_dir, f"sam2_prompt_encoder")
-    pt_name = output_path + ".pt"
-    traced_model.save(pt_name)
 
     points_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16), 2))
     labels_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16)))
@@ -197,7 +199,7 @@ def export_prompt_encoder(
             ct.TensorType(name="sparse_embeddings"),
             ct.TensorType(name="dense_embeddings"),
         ],
-        minimum_deployment_target=min_deployment_target,
+        minimum_deployment_target=min_target,
         compute_units=compute_units,
     )
 
@@ -208,7 +210,7 @@ def export_prompt_encoder(
 def export_mask_decoder(
     image_predictor: SAM2ImagePredictor,
     output_dir: str,
-    min_deployment_target: AvailableTarget,
+    min_target: AvailableTarget,
     compute_units: ComputeUnit,
 ):
     image_predictor.model.sam_mask_decoder.eval()
@@ -219,20 +221,22 @@ def export_mask_decoder(
     dense_embedding = torch.randn(1, 256, 64, 64)
 
     traced_model = torch.jit.trace(
-        SAM2MaskDecoder(image_predictor), (image_embedding, sparse_embedding, dense_embedding, s0, s1)
-        )
+        SAM2MaskDecoder(image_predictor),
+        (image_embedding, sparse_embedding, dense_embedding, s0, s1),
+    )
     traced_model.eval()
 
     output_path = os.path.join(output_dir, f"sam2_mask_decoder")
-    pt_name = output_path + ".pt"
-    traced_model.save(pt_name)
 
     # Convert to CoreML
     mlmodel = ct.convert(
         traced_model,
         inputs=[
             ct.TensorType(name="image_embedding", shape=[1, 256, 64, 64]),
-            ct.TensorType(name="sparse_embedding", shape=ct.EnumeratedShapes(shapes=[[1, i, 256] for i in range(2, 16)])),
+            ct.TensorType(
+                name="sparse_embedding",
+                shape=ct.EnumeratedShapes(shapes=[[1, i, 256] for i in range(2, 16)]),
+            ),
             ct.TensorType(name="dense_embedding", shape=[1, 256, 64, 64]),
             ct.TensorType(name="feats_s0", shape=[1, 32, 256, 256]),
             ct.TensorType(name="feats_s1", shape=[1, 64, 128, 128]),
@@ -240,7 +244,7 @@ def export_mask_decoder(
         outputs=[
             ct.TensorType(name="embedding"),
         ],
-        minimum_deployment_target=min_deployment_target,
+        minimum_deployment_target=min_target,
         compute_units=compute_units,
     )
 
@@ -253,7 +257,7 @@ def export(
     variant: SAM2Variant,
     points: list,
     labels: list,
-    min_deployment_target: AvailableTarget,
+    min_target: AvailableTarget,
     compute_units: ComputeUnit,
 ):
     os.makedirs(output_dir, exist_ok=True)
@@ -270,11 +274,11 @@ def export(
         img_predictor = SAM2ImagePredictor(model)
         img_predictor.model.eval()
 
-    # export_image_encoder(img_predictor, output_dir, min_deployment_target, compute_units)
-    #export_prompt_encoder(
-    #    img_predictor, points, labels, output_dir, min_deployment_target, compute_units
-    #)
-    export_mask_decoder(img_predictor, output_dir, min_deployment_target, compute_units)
+    export_image_encoder(img_predictor, output_dir, min_target, compute_units)
+    export_prompt_encoder(
+        img_predictor, points, labels, output_dir, min_target, compute_units
+    )
+    export_mask_decoder(img_predictor, output_dir, min_target, compute_units)
 
 
 if __name__ == "__main__":

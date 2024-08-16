@@ -157,14 +157,14 @@ class SAM2ImagePredictor:
     @torch.no_grad()
     def encode_points_raw(
         self, unnorm_coords: torch.Tensor, labels: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]: 
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         concat_points = (unnorm_coords, labels)
         with torch.no_grad():
             for _, param in self.model.named_parameters():
                 if param.requires_grad:
                     param.requires_grad = False
-            (sparse_embeddings, dense_embeddings) = self.model.sam_prompt_encoder.points_only(
-                points=concat_points
+            (sparse_embeddings, dense_embeddings) = (
+                self.model.sam_prompt_encoder.points_only(points=concat_points)
             )
             print("DENSE SHAPE: ", dense_embeddings.shape)
             return (sparse_embeddings, dense_embeddings)
