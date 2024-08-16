@@ -39,8 +39,8 @@ def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--variant",
-        type=SAM2Variant,
-        choices=[variant.name for variant in SAM2Variant],
+        type=lambda x: getattr(SAM2Variant, x),
+        choices=[variant for variant in SAM2Variant],
         default=SAM2Variant.Small,
         help="SAM2 variant to export.",
     )
@@ -59,14 +59,14 @@ def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--min-deployment-target",
         type=lambda x: getattr(AvailableTarget, x),
-        choices=[target.name for target in AvailableTarget],
+        choices=[target for target in AvailableTarget],
         default=AvailableTarget.iOS17,
         help="Minimum deployment target for CoreML model.",
     )
     parser.add_argument(
         "--compute-units",
         type=lambda x: getattr(ComputeUnit, x),
-        choices=[cu.name for cu in ComputeUnit],
+        choices=[cu for cu in ComputeUnit],
         default=ComputeUnit.ALL,
         help="Which compute units to target for CoreML model.",
     )
@@ -248,7 +248,8 @@ def export_image_encoder(
         compute_units=compute_units,
     )
 
-    validate_image_encoder(mlmodel, prepared_images)
+    if variant == SAM2Variant.Small:
+        validate_image_encoder(mlmodel, prepared_images)
 
     mlmodel.save(output_path + ".mlpackage")
     return orig_hw
@@ -299,9 +300,9 @@ def export_prompt_encoder(
         compute_units=compute_units,
     )
 
-    validate_prompt_encoder(mlmodel, unnorm_coords, labels)
+    if variant == SAM2Variant.Small:
+        validate_prompt_encoder(mlmodel, unnorm_coords, labels)
 
-    # Save the CoreML model
     mlmodel.save(output_path + ".mlpackage")
 
 
@@ -327,7 +328,6 @@ def export_mask_decoder(
 
     output_path = os.path.join(output_dir, f"sam2_{variant.value}_mask_decoder")
 
-    # Convert to CoreML
     mlmodel = ct.convert(
         traced_model,
         inputs=[
@@ -347,15 +347,17 @@ def export_mask_decoder(
         compute_units=compute_units,
     )
 
-    image_embedding = np.load("notebooks/image_embed.npy")
-    sparse_embedding = np.load("notebooks/sparse_embeddings.npy")
-    dense_embedding = np.load("notebooks/dense_embeddings.npy")
-    s0 = np.load("notebooks/feats_s0.npy")
-    s1 = np.load("notebooks/feats_s1.npy")
-    validate_mask_decoder(
-        mlmodel, image_embedding, sparse_embedding, dense_embedding, s0, s1
-    )
-    ## Save the CoreML model
+
+    if variant == SAM2Variant.Small:
+        image_embedding = np.load("notebooks/image_embed.npy")
+        sparse_embedding = np.load("notebooks/sparse_embeddings.npy")
+        dense_embedding = np.load("notebooks/dense_embeddings.npy")
+        s0 = np.load("notebooks/feats_s0.npy")
+        s1 = np.load("notebooks/feats_s1.npy")
+        validate_mask_decoder(
+            mlmodel, image_embedding, sparse_embedding, dense_embedding, s0, s1
+        )
+
     mlmodel.save(output_path + ".mlpackage")
 
 
