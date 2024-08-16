@@ -92,8 +92,8 @@ class SAM2ImageEncoder(torch.nn.Module):
 
     @torch.no_grad()
     def forward(self, image):
-        img_embedding = self.model.generate_image_embedding(image)
-        return img_embedding
+        (img_embedding, feats_s0, feats_s1) = self.model.encode_image_raw(image)
+        return img_embedding, feats_s0, feats_s1
 
 
 class SAM2PromptEncoder(torch.nn.Module):
@@ -103,9 +103,18 @@ class SAM2PromptEncoder(torch.nn.Module):
 
     @torch.no_grad()
     def forward(self, points, labels):
-        prompt_embedding = self.model.encode_points_prompt(points, labels)
+        prompt_embedding = self.model.encode_points_raw(points, labels)
         return prompt_embedding
 
+class SAM2MaskDecoder(torch.nn.Module):
+    def __init__(self, model: SAM2ImagePredictor):
+        super().__init__()
+        self.model = model
+
+    @torch.no_grad()
+    def forward(self, image_embedding, sparse_embedding, dense_embedding, feats_s0, feats_s1):
+        low_res_masks = self.model.decode_masks_raw(image_embedding, sparse_embedding, dense_embedding, [feats_s0, feats_s1])
+        return low_res_masks 
 
 def export_image_encoder(
     image_predictor: SAM2ImagePredictor,
@@ -185,7 +194,8 @@ def export_prompt_encoder(
             ct.TensorType(name="labels", shape=labels_shape),
         ],
         outputs=[
-            ct.TensorType(name="embedding"),
+            ct.TensorType(name="sparse_embeddings"),
+            ct.TensorType(name="dense_embeddings"),
         ],
         minimum_deployment_target=min_deployment_target,
         compute_units=compute_units,
@@ -194,32 +204,48 @@ def export_prompt_encoder(
     # Save the CoreML model
     mlmodel.save(output_path + ".mlpackage")
 
+
 def export_mask_decoder(
     image_predictor: SAM2ImagePredictor,
     output_dir: str,
     min_deployment_target: AvailableTarget,
     compute_units: ComputeUnit,
 ):
-    pass
-    #points_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16), 2))
-    #labels_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16)))
+    image_predictor.model.sam_mask_decoder.eval()
+    s0 = torch.randn(1, 32, 256, 256)
+    s1 = torch.randn(1, 64, 128, 128)
+    image_embedding = torch.randn(1, 256, 64, 64)
+    sparse_embedding = torch.randn(1, 3, 256)
+    dense_embedding = torch.randn(1, 256, 64, 64)
 
-    ## Convert to CoreML
-    #mlmodel = ct.convert(
-    #    traced_model,
-    #    inputs=[
-    #        ct.TensorType(name="points", shape=points_shape),
-    #        ct.TensorType(name="labels", shape=labels_shape),
-    #    ],
-    #    outputs=[
-    #        ct.TensorType(name="embedding"),
-    #    ],
-    #    minimum_deployment_target=min_deployment_target,
-    #    compute_units=compute_units,
-    #)
+    traced_model = torch.jit.trace(
+        SAM2MaskDecoder(image_predictor), (image_embedding, sparse_embedding, dense_embedding, s0, s1)
+        )
+    traced_model.eval()
+
+    output_path = os.path.join(output_dir, f"sam2_mask_decoder")
+    pt_name = output_path + ".pt"
+    traced_model.save(pt_name)
+
+    # Convert to CoreML
+    mlmodel = ct.convert(
+        traced_model,
+        inputs=[
+            ct.TensorType(name="image_embedding", shape=[1, 256, 64, 64]),
+            ct.TensorType(name="sparse_embedding", shape=ct.EnumeratedShapes(shapes=[[1, i, 256] for i in range(2, 16)])),
+            ct.TensorType(name="dense_embedding", shape=[1, 256, 64, 64]),
+            ct.TensorType(name="feats_s0", shape=[1, 32, 256, 256]),
+            ct.TensorType(name="feats_s1", shape=[1, 64, 128, 128]),
+        ],
+        outputs=[
+            ct.TensorType(name="embedding"),
+        ],
+        minimum_deployment_target=min_deployment_target,
+        compute_units=compute_units,
+    )
 
     ## Save the CoreML model
-    #mlmodel.save(output_path + ".mlpackage")
+    mlmodel.save(output_path + ".mlpackage")
 
 
 def export(
@@ -235,20 +261,21 @@ def export(
 
     # Build SAM2 model
     sam2_checkpoint = (
-        f"/Users/fleetwood/Code/segment-anything-2/checkpoints/sam2_hiera_small.pt"
+        f"/Users/fleetwood/Code/segment-anything-2/checkpoints/sam2_hiera_tiny.pt"
     )
-    model_cfg = "sam2_hiera_s.yaml"
+    model_cfg = "sam2_hiera_t.yaml"
 
     with torch.no_grad():
         model = build_sam2(model_cfg, sam2_checkpoint, device=device)
         img_predictor = SAM2ImagePredictor(model)
         img_predictor.model.eval()
 
-    export_image_encoder(img_predictor, output_dir, min_deployment_target, compute_units)
+    # export_image_encoder(img_predictor, output_dir, min_deployment_target, compute_units)
     #export_prompt_encoder(
     #    img_predictor, points, labels, output_dir, min_deployment_target, compute_units
     #)
-    #export_mask_decoder(img_predictor, output_dir, min_deployment_target, compute_units)
+    export_mask_decoder(img_predictor, output_dir, min_deployment_target, compute_units)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SAM2 -> CoreML CLI")
@@ -274,6 +301,9 @@ if __name__ == "__main__":
 
     if len(points) != len(labels):
         raise ValueError("Number of points must match the number of labels")
+
+    if len(points) > 16:
+        raise ValueError("Number of points must be less than or equal to 16")
 
     export(
         args.output_dir,

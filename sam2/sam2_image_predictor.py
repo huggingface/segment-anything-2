@@ -129,7 +129,7 @@ class SAM2ImagePredictor:
         logging.info("Image embeddings computed.")
 
     @torch.no_grad()
-    def generate_image_embedding(self, input_image: torch.Tensor):
+    def encode_image_raw(self, input_image: torch.Tensor):
         self.model.eval()
         with torch.no_grad():
             for _, param in self.model.named_parameters():
@@ -155,18 +155,45 @@ class SAM2ImagePredictor:
             return (image_embed, feats_s0, feats_s1)
 
     @torch.no_grad()
-    def encode_points_prompt(
+    def encode_points_raw(
         self, unnorm_coords: torch.Tensor, labels: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]: 
         concat_points = (unnorm_coords, labels)
         with torch.no_grad():
             for _, param in self.model.named_parameters():
                 if param.requires_grad:
                     param.requires_grad = False
-            sparse_embeddings = self.model.sam_prompt_encoder.points_only(
+            (sparse_embeddings, dense_embeddings) = self.model.sam_prompt_encoder.points_only(
                 points=concat_points
             )
-            return sparse_embeddings
+            print("DENSE SHAPE: ", dense_embeddings.shape)
+            return (sparse_embeddings, dense_embeddings)
+
+    @torch.no_grad()
+    def decode_masks_raw(
+        self,
+        image_embeddings: torch.Tensor,
+        sparse_embedding: torch.Tensor,
+        dense_embedding: torch.Tensor,
+        high_res_features: List[torch.Tensor],
+        multimask_output: bool = True,
+        batched_mode: bool = False,
+    ):
+        with torch.no_grad():
+            for _, param in self.model.sam_mask_decoder.named_parameters():
+                if param.requires_grad:
+                    param.requires_grad = False
+
+            low_res_masks, _, _, _ = self.model.sam_mask_decoder(
+                image_embeddings=image_embeddings,
+                image_pe=self.model.sam_prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embedding,
+                dense_prompt_embeddings=dense_embedding,
+                multimask_output=multimask_output,
+                repeat_image=batched_mode,
+                high_res_features=high_res_features,
+            )
+            return low_res_masks
 
     @torch.no_grad()
     def set_image_batch(

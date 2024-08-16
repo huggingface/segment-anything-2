@@ -19,6 +19,7 @@ from sam2.modeling.backbones.utils import (
 
 from sam2.modeling.sam2_utils import DropPath, MLP
 
+
 def do_pool(x: torch.Tensor, pool: nn.Module, norm: nn.Module = None) -> torch.Tensor:
     if pool is None:
         return x
