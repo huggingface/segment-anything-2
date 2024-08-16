@@ -40,7 +40,7 @@ def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--variant",
         type=SAM2Variant,
-        choices=list(SAM2Variant),
+        choices=[variant.name for variant in SAM2Variant],
         default=SAM2Variant.Small,
         help="SAM2 variant to export.",
     )
@@ -66,7 +66,7 @@ def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--compute-units",
         type=lambda x: getattr(ComputeUnit, x),
-        choices=[cu for cu in ComputeUnit],
+        choices=[cu.name for cu in ComputeUnit],
         default=ComputeUnit.ALL,
         help="Which compute units to target for CoreML model.",
     )
