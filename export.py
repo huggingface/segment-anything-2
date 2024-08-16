@@ -16,7 +16,6 @@ from coremltools import ComputeUnit
 from coremltools.converters.mil import register_torch_op
 from coremltools.converters.mil.mil import Builder as mb
 
-
 class SAM2Variant(enum.Enum):
     Tiny = "tiny"
     Small = "small"
