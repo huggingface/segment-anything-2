@@ -131,6 +131,63 @@ def validate_image_encoder(model: ct.models.MLModel, prepared_image: np.ndarray)
     # assert np.allclose(predictions["feats_s1"], ground_feats_s1, atol=1e-4)
 
 
+def validate_prompt_encoder(model: ct.models.MLModel, points, labels):
+    predictions = model.predict({"points": points, "labels": labels})
+
+    ground_sparse = np.load("notebooks/sparse_embeddings.npy")
+    ground_dense = np.load("notebooks/dense_embeddings.npy")
+
+    sparse_max_diff = np.max(np.abs(predictions["sparse_embeddings"] - ground_sparse))
+    sparse_avg_diff = np.mean(np.abs(predictions["sparse_embeddings"] - ground_sparse))
+
+    dense_max_diff = np.max(np.abs(predictions["dense_embeddings"] - ground_dense))
+    dense_avg_diff = np.mean(np.abs(predictions["dense_embeddings"] - ground_dense))
+
+    print(
+        "Sparse Embeddings: Max Diff: {:.4f}, Avg Diff: {:.4f}".format(
+            sparse_max_diff, sparse_avg_diff
+        )
+    )
+    print(
+        "Dense Embeddings: Max Diff: {:.4f}, Avg Diff: {:.4f}".format(
+            dense_max_diff, dense_avg_diff
+        )
+    )
+
+    assert np.allclose(predictions["sparse_embeddings"], ground_sparse, atol=1e-4)
+    assert np.allclose(predictions["dense_embeddings"], ground_dense, atol=1e-4)
+
+
+def validate_mask_decoder(
+    model: ct.models.MLModel,
+    image_embedding,
+    sparse_embedding,
+    dense_embedding,
+    feats_s0,
+    feats_s1,
+):
+    predictions = model.predict(
+        {
+            "image_embedding": image_embedding,
+            "sparse_embedding": sparse_embedding,
+            "dense_embedding": dense_embedding,
+            "feats_s0": feats_s0,
+            "feats_s1": feats_s1,
+        }
+    )
+
+    ground_masks = np.load("notebooks/low_res_masks.npy")
+
+    masks_max_diff = np.max(np.abs(predictions["low_res_masks"] - ground_masks))
+    masks_avg_diff = np.mean(np.abs(predictions["low_res_masks"] - ground_masks))
+
+    print(
+        "Masks: Max Diff: {:.4f}, Avg Diff: {:.4f}".format(
+            masks_max_diff, masks_avg_diff
+        )
+    )
+
+
 class SAM2PromptEncoder(torch.nn.Module):
     def __init__(self, model: SAM2ImagePredictor):
         super().__init__()
@@ -167,7 +224,7 @@ def export_image_encoder(
     # Prepare input tensors
     image = Image.open("notebooks/images/truck.jpg")
     image = np.array(image.convert("RGB"))
-    orig_hw = (image.shape[0], image.shape[1]) 
+    orig_hw = (image.shape[0], image.shape[1])
 
     prepared_images = image_predictor._transforms(image)
     prepared_images = prepared_images[None, ...].to("cpu")
@@ -212,7 +269,9 @@ def export_prompt_encoder(
     labels = torch.tensor(input_labels, dtype=torch.int32)
 
     unnorm_coords = image_predictor._transforms.transform_coords(
-        points, normalize=True, orig_hw=orig_hw,  # todo: avoid hardcoding truck.jpg
+        points,
+        normalize=True,
+        orig_hw=orig_hw,  # todo: avoid hardcoding truck.jpg
     )
     unnorm_coords, labels = unnorm_coords[None, ...], labels[None, ...]
 
@@ -238,6 +297,8 @@ def export_prompt_encoder(
         minimum_deployment_target=min_target,
         compute_units=compute_units,
     )
+
+    validate_prompt_encoder(mlmodel, unnorm_coords, labels)
 
     # Save the CoreML model
     mlmodel.save(output_path + ".mlpackage")
@@ -279,12 +340,20 @@ def export_mask_decoder(
             ct.TensorType(name="feats_s1", shape=[1, 64, 128, 128]),
         ],
         outputs=[
-            ct.TensorType(name="embedding"),
+            ct.TensorType(name="low_res_masks"),
         ],
         minimum_deployment_target=min_target,
         compute_units=compute_units,
     )
 
+    image_embedding = np.load("notebooks/image_embed.npy")
+    sparse_embedding = np.load("notebooks/sparse_embeddings.npy")
+    dense_embedding = np.load("notebooks/dense_embeddings.npy")
+    s0 = np.load("notebooks/feats_s0.npy")
+    s1 = np.load("notebooks/feats_s1.npy")
+    validate_mask_decoder(
+        mlmodel, image_embedding, sparse_embedding, dense_embedding, s0, s1
+    )
     ## Save the CoreML model
     mlmodel.save(output_path + ".mlpackage")
 
@@ -309,11 +378,11 @@ def export(
         img_predictor = SAM2ImagePredictor(model)
         img_predictor.model.eval()
 
-    orig_hw = export_image_encoder(img_predictor, variant, output_dir, min_target, compute_units)
+    # orig_hw = export_image_encoder(img_predictor, variant, output_dir, min_target, compute_units)
     # export_prompt_encoder(
-    #    img_predictor, variant, points, labels, orig_hw, output_dir, min_target, compute_units
+    #   img_predictor, variant, points, labels, orig_hw, output_dir, min_target, compute_units
     # )
-    # export_mask_decoder(img_predictor,variant, output_dir, min_target, compute_units)
+    export_mask_decoder(img_predictor, variant, output_dir, min_target, compute_units)
 
 
 if __name__ == "__main__":

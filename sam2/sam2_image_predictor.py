@@ -493,6 +493,12 @@ class SAM2ImagePredictor:
             masks=mask_input,
         )
 
+        if os.environ.get("SERIALIZE_GROUND", False):
+            sparse_embeddings_np = sparse_embeddings.cpu().numpy()
+            dense_embeddings_np = dense_embeddings.cpu().numpy()
+            np.save("sparse_embeddings.npy", sparse_embeddings_np)
+            np.save("dense_embeddings.npy", dense_embeddings_np)
+
         # Predict masks
         batched_mode = (
             concat_points is not None and concat_points[0].shape[0] > 1
@@ -510,6 +516,10 @@ class SAM2ImagePredictor:
             repeat_image=batched_mode,
             high_res_features=high_res_features,
         )
+
+        if os.environ.get("SERIALIZE_GROUND", False):
+            low_res_masks_np = low_res_masks.cpu().numpy()
+            np.save("low_res_masks.npy", low_res_masks_np)
 
         # Upscale the masks to the original image resolution
         masks = self._transforms.postprocess_masks(
