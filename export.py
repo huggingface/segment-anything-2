@@ -13,6 +13,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 import coremltools as ct
 from coremltools.converters.mil._deployment_compatibility import AvailableTarget
 from coremltools import ComputeUnit
+from coremltools.converters.mil.mil.passes.defs.quantization import ComputePrecision 
 from coremltools.converters.mil import register_torch_op
 from coremltools.converters.mil.mil import Builder as mb
 
@@ -69,6 +70,13 @@ def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         choices=[cu for cu in ComputeUnit],
         default=ComputeUnit.ALL,
         help="Which compute units to target for CoreML model.",
+    )
+    parser.add_argument(
+        "--precision",
+        type=lambda x: getattr(ComputePrecision, x),
+        choices=[p for p in ComputePrecision],
+        default=ComputePrecision.FLOAT16,
+        help="Precision to use for quantization.",
     )
     return parser
 
@@ -221,6 +229,7 @@ def export_image_encoder(
     output_dir: str,
     min_target: AvailableTarget,
     compute_units: ComputeUnit,
+    precision: ComputePrecision,
 ) -> Tuple[int, int]:
     # Prepare input tensors
     image = Image.open("notebooks/images/truck.jpg")
@@ -246,6 +255,7 @@ def export_image_encoder(
         ],
         minimum_deployment_target=min_target,
         compute_units=compute_units,
+        compute_precision=precision,
     )
 
     if variant == SAM2Variant.Small:
@@ -264,6 +274,7 @@ def export_prompt_encoder(
     output_dir: str,
     min_target: AvailableTarget,
     compute_units: ComputeUnit,
+    precision: ComputePrecision,
 ):
     image_predictor.model.sam_prompt_encoder.eval()
 
@@ -298,6 +309,7 @@ def export_prompt_encoder(
         ],
         minimum_deployment_target=min_target,
         compute_units=compute_units,
+        compute_precision=precision,
     )
 
     if variant == SAM2Variant.Small:
@@ -312,6 +324,7 @@ def export_mask_decoder(
     output_dir: str,
     min_target: AvailableTarget,
     compute_units: ComputeUnit,
+    precision: ComputePrecision,
 ):
     image_predictor.model.sam_mask_decoder.eval()
     s0 = torch.randn(1, 32, 256, 256)
@@ -345,6 +358,7 @@ def export_mask_decoder(
         ],
         minimum_deployment_target=min_target,
         compute_units=compute_units,
+        compute_precision=precision,
     )
 
 
@@ -368,6 +382,7 @@ def export(
     labels: list,
     min_target: AvailableTarget,
     compute_units: ComputeUnit,
+    precision: ComputePrecision,
 ):
     os.makedirs(output_dir, exist_ok=True)
     device = torch.device("cpu")
@@ -381,11 +396,11 @@ def export(
         img_predictor = SAM2ImagePredictor(model)
         img_predictor.model.eval()
 
-        orig_hw = export_image_encoder(img_predictor, variant, output_dir, min_target, compute_units)
+        orig_hw = export_image_encoder(img_predictor, variant, output_dir, min_target, compute_units, precision)
         export_prompt_encoder(
-          img_predictor, variant, points, labels, orig_hw, output_dir, min_target, compute_units
+          img_predictor, variant, points, labels, orig_hw, output_dir, min_target, compute_units, precision
         )
-        export_mask_decoder(img_predictor, variant, output_dir, min_target, compute_units)
+        export_mask_decoder(img_predictor, variant, output_dir, min_target, compute_units, precision)
 
 
 if __name__ == "__main__":
@@ -423,4 +438,5 @@ if __name__ == "__main__":
         labels,
         args.min_deployment_target,
         args.compute_units,
+        args.precision,
     )
