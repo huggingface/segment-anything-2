@@ -369,10 +369,6 @@ class SAM2ImagePredictor:
             point_coords, point_labels, box, mask_input, normalize_coords
         )
 
-        print("After preparing prompts")
-        print(unnorm_coords)
-        print(labels)
-
         masks, iou_predictions, low_res_masks = self._predict(
             unnorm_coords,
             labels,

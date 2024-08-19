@@ -114,9 +114,9 @@ class SAM2ImageEncoder(torch.nn.Module):
 def validate_image_encoder(model: ct.models.MLModel, prepared_image: np.ndarray):
     predictions = model.predict({"image": prepared_image})
 
-    ground_embedding = np.load("notebooks/image_embed.npy")
-    ground_feats_s0 = np.load("notebooks/feats_s0.npy")
-    ground_feats_s1 = np.load("notebooks/feats_s1.npy")
+    ground_embedding = np.load("../notebooks/image_embed.npy")
+    ground_feats_s0 = np.load("../notebooks/feats_s0.npy")
+    ground_feats_s1 = np.load("../notebooks/feats_s1.npy")
 
     img_max_diff = np.max(np.abs(predictions["image_embedding"] - ground_embedding))
     img_avg_diff = np.mean(np.abs(predictions["image_embedding"] - ground_embedding))
@@ -141,8 +141,8 @@ def validate_image_encoder(model: ct.models.MLModel, prepared_image: np.ndarray)
 def validate_prompt_encoder(model: ct.models.MLModel, points, labels):
     predictions = model.predict({"points": points, "labels": labels})
 
-    ground_sparse = np.load("notebooks/sparse_embeddings.npy")
-    ground_dense = np.load("notebooks/dense_embeddings.npy")
+    ground_sparse = np.load("../notebooks/sparse_embeddings.npy")
+    ground_dense = np.load("../notebooks/dense_embeddings.npy")
 
     sparse_max_diff = np.max(np.abs(predictions["sparse_embeddings"] - ground_sparse))
     sparse_avg_diff = np.mean(np.abs(predictions["sparse_embeddings"] - ground_sparse))
@@ -183,7 +183,8 @@ def validate_mask_decoder(
         }
     )
 
-    ground_masks = np.load("notebooks/low_res_masks.npy")
+    ground_masks = np.load("../notebooks/low_res_masks.npy")
+    print("Ground shape: ", ground_masks.shape)
 
     masks_max_diff = np.max(np.abs(predictions["low_res_masks"] - ground_masks))
     masks_avg_diff = np.mean(np.abs(predictions["low_res_masks"] - ground_masks))
@@ -232,7 +233,7 @@ def export_image_encoder(
     precision: ComputePrecision,
 ) -> Tuple[int, int]:
     # Prepare input tensors
-    image = Image.open("notebooks/images/truck.jpg")
+    image = Image.open("../notebooks/images/truck.jpg")
     image = np.array(image.convert("RGB"))
     orig_hw = (image.shape[0], image.shape[1])
 
@@ -363,11 +364,11 @@ def export_mask_decoder(
 
 
     if variant == SAM2Variant.Small:
-        image_embedding = np.load("notebooks/image_embed.npy")
-        sparse_embedding = np.load("notebooks/sparse_embeddings.npy")
-        dense_embedding = np.load("notebooks/dense_embeddings.npy")
-        s0 = np.load("notebooks/feats_s0.npy")
-        s1 = np.load("notebooks/feats_s1.npy")
+        image_embedding = np.load("../notebooks/image_embed.npy")
+        sparse_embedding = np.load("../notebooks/sparse_embeddings.npy")
+        dense_embedding = np.load("../notebooks/dense_embeddings.npy")
+        s0 = np.load("../notebooks/feats_s0.npy")
+        s1 = np.load("../notebooks/feats_s1.npy")
         validate_mask_decoder(
             mlmodel, image_embedding, sparse_embedding, dense_embedding, s0, s1
         )
@@ -388,7 +389,7 @@ def export(
     device = torch.device("cpu")
 
     # Build SAM2 model
-    sam2_checkpoint = f"./checkpoints/sam2_hiera_{variant.value}.pt"
+    sam2_checkpoint = f"../checkpoints/sam2_hiera_{variant.value}.pt"
     model_cfg = variant.cfg()
 
     with torch.no_grad():
