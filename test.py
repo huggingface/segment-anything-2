@@ -61,9 +61,9 @@ def show_masks(
             assert input_labels is not None
             show_points(point_coords, input_labels, plt.gca())
         if len(scores) > 1:
-            plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
+            plt.title(f"Torch\nMask {i+1}, Score: {score:.3f}", fontsize=18)
         plt.axis("off")
-        plt.show()
+        plt.savefig(f"mask_{i+1}.png")
 
 
 device = "cpu"

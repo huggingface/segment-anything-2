@@ -66,7 +66,6 @@ class SAM2CoreMLPredictor:
         
         # Decode mask
         low_res_masks = self.decode_mask(image_embedding, sparse_embeddings, dense_embeddings, feats_s0, feats_s1)
-        print("low res masks: ", low_res_masks)
         
         # Postprocess mask
         low_res_masks = torch.tensor(low_res_masks, dtype=torch.float32)
@@ -116,9 +115,9 @@ def show_masks(image, masks, scores, point_coords=None, box_coords=None, input_l
             # boxes
             show_box(box_coords, plt.gca())
         if len(scores) > 1:
-            plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
+            plt.title(f"CoreML\nMask {i+1}, Score: {score:.3f}", fontsize=18)
         plt.axis('off')
-        plt.show()
+        plt.savefig(f"mask_{i}.png")
 
 # Example usage
 if __name__ == "__main__":
@@ -131,8 +130,6 @@ if __name__ == "__main__":
     
     image = Image.open(image_path)
     image = np.array(image.convert("RGB"))
-    print("Shape: ", image.shape)
 
     masks = predictor.predict(image_path, input_point, input_label)
-    print("Masks: ", masks)
     show_masks(image, masks, [1,1,1], point_coords=input_point, input_labels=input_label, borders=True)
