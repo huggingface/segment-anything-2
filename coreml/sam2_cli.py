@@ -2,23 +2,7 @@ import argparse
 import ast
 import numpy as np
 from PIL import Image
-from sam2_coreml import SAM2CoreMLPredictor, show_masks
-import enum
-
-
-class SAM2Variant(enum.Enum):
-    Tiny = "tiny"
-    Small = "small"
-    BasePlus = "base_plus"
-    Large = "large"
-
-    def cfg(self):
-        match self:
-            case SAM2Variant.BasePlus:
-                return "sam2_hiera_b+.yaml"
-            case _:
-                return f"sam2_hiera_{self.value[0]}.yaml"
-
+from sam2_coreml import SAM2CoreMLPredictor, show_masks, SAM2Variant
 
 def parse_args():
     parser = argparse.ArgumentParser(description="SAM2 CoreML CLI")

@@ -4,7 +4,6 @@ import ast
 import torch
 from typing import List, Tuple
 import numpy as np
-import enum
 from PIL import Image
 from PIL.Image import Resampling
 
@@ -17,22 +16,9 @@ from coremltools import ComputeUnit
 from coremltools.converters.mil.mil.passes.defs.quantization import ComputePrecision
 from coremltools.converters.mil import register_torch_op
 from coremltools.converters.mil.mil import Builder as mb
+from .sam2_coreml import SAM2Variant
 
 SAM2_HW = (1024, 1024)
-
-class SAM2Variant(enum.Enum):
-    Tiny = "tiny"
-    Small = "small"
-    BasePlus = "base_plus"
-    Large = "large"
-
-    def cfg(self):
-        match self:
-            case SAM2Variant.BasePlus:
-                return "sam2_hiera_b+.yaml"
-            case _:
-                return f"sam2_hiera_{self.value[0]}.yaml"
-
 
 def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(

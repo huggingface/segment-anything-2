@@ -4,12 +4,26 @@ import coremltools as ct
 from sam2.utils.transforms import SAM2Transforms
 import torch
 import matplotlib.pyplot as plt
+import enum
+
+class SAM2Variant(enum.Enum):
+    Tiny = "tiny"
+    Small = "small"
+    BasePlus = "base_plus"
+    Large = "large"
+
+    def cfg(self):
+        match self:
+            case SAM2Variant.BasePlus:
+                return "sam2_hiera_b+.yaml"
+            case _:
+                return f"sam2_hiera_{self.value[0]}.yaml"
 
 
 class SAM2CoreMLPredictor:
     def __init__(
         self,
-        variant="small",
+        variant=SAM2Variant.Small,
         model_dir=".",
         mask_threshold=0.0,
         max_hole_area=0.0,
@@ -177,7 +191,7 @@ def show_masks(
 
 # Example usage
 if __name__ == "__main__":
-    predictor = SAM2CoreMLPredictor(variant="small")
+    predictor = SAM2CoreMLPredictor(variant=SAM2Variant.Large)
 
     image_path = "../notebooks/images/truck.jpg"
 
