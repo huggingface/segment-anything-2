@@ -91,8 +91,6 @@ def main():
     )
 
     image = Image.open(args.image_path)
-    image = np.array(image.convert("RGB"))
-
     masks = predictor.predict(args.image_path, np.array(points), np.array(labels))
 
     show_masks(

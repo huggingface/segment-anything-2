@@ -15,16 +15,17 @@ class SAM2CoreMLPredictor:
         max_hole_area=0.0,
         max_sprinkle_area=0.0,
     ):
+        self.input_hw = (1024, 1024)
         self.variant = variant
         self.model_dir = model_dir
         self._transforms = SAM2Transforms(
-            resolution=1024,
+            resolution=self.input_hw[0],
             mask_threshold=mask_threshold,
             max_hole_area=max_hole_area,
             max_sprinkle_area=max_sprinkle_area,
         )
         self.mask_threshold = mask_threshold
-        self.orig_hw = (1200, 1800)
+        self.orig_hw = None 
         self.load_models()
 
     def load_models(self):
@@ -62,11 +63,10 @@ class SAM2CoreMLPredictor:
 
     def load_image(self, image_path):
         image = Image.open(image_path)
-        image = np.array(image.convert("RGB"))
-        self.orig_hw = (image.shape[0], image.shape[1])
+        self.orig_hw = image.size[::-1] 
 
-        transformed = self._transforms(image)
-        return transformed[None, ...].to("cpu")
+        image = image.resize(self.input_hw, Image.Resampling.BILINEAR)
+        return image
 
     def preprocess_prompt(self, points, labels):
         points = torch.tensor(points, dtype=torch.float32)
@@ -162,12 +162,9 @@ def show_masks(
     for i, (mask, score) in enumerate(zip(masks, scores)):
         plt.figure(figsize=(10, 10))
         plt.imshow(image)
-        print("Shape before show_mask: ", mask.shape)
         show_mask(mask, plt.gca(), borders=borders)
         if point_coords is not None:
             assert input_labels is not None
-            print("Point coords: ", point_coords)
-            print("Input labels: ", input_labels)
             show_points(point_coords, input_labels, plt.gca())
         if box_coords is not None:
             # boxes
