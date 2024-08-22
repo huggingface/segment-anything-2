@@ -5,6 +5,7 @@ from PIL import Image
 from sam2_coreml import SAM2CoreMLPredictor, show_masks
 import enum
 
+
 class SAM2Variant(enum.Enum):
     Tiny = "tiny"
     Small = "small"
@@ -17,6 +18,7 @@ class SAM2Variant(enum.Enum):
                 return "sam2_hiera_b+.yaml"
             case _:
                 return f"sam2_hiera_{self.value[0]}.yaml"
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="SAM2 CoreML CLI")
@@ -59,6 +61,7 @@ def parse_args():
     )
     return parser.parse_args()
 
+
 def main():
     args = parse_args()
 
@@ -84,7 +87,7 @@ def main():
     predictor = SAM2CoreMLPredictor(
         variant=args.variant.name,
         model_dir=args.model_dir,
-        mask_threshold=args.mask_threshold
+        mask_threshold=args.mask_threshold,
     )
 
     image = Image.open(args.image_path)
@@ -92,7 +95,14 @@ def main():
 
     masks = predictor.predict(args.image_path, np.array(points), np.array(labels))
 
-    show_masks(image, masks, [1,1,1], point_coords=np.array(points), input_labels=np.array(labels))
+    show_masks(
+        image,
+        masks,
+        [1, 1, 1],
+        point_coords=np.array(points),
+        input_labels=np.array(labels),
+    )
+
 
 if __name__ == "__main__":
     main()

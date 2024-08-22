@@ -6,6 +6,7 @@ from typing import List, Tuple
 import numpy as np
 import enum
 from PIL import Image
+from PIL.Image import Resampling
 
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
@@ -13,9 +14,11 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 import coremltools as ct
 from coremltools.converters.mil._deployment_compatibility import AvailableTarget
 from coremltools import ComputeUnit
-from coremltools.converters.mil.mil.passes.defs.quantization import ComputePrecision 
+from coremltools.converters.mil.mil.passes.defs.quantization import ComputePrecision
 from coremltools.converters.mil import register_torch_op
 from coremltools.converters.mil.mil import Builder as mb
+
+SAM2_HW = (1024, 1024)
 
 class SAM2Variant(enum.Enum):
     Tiny = "tiny"
@@ -111,7 +114,7 @@ class SAM2ImageEncoder(torch.nn.Module):
         return img_embedding, feats_s0, feats_s1
 
 
-def validate_image_encoder(model: ct.models.MLModel, prepared_image: np.ndarray):
+def validate_image_encoder(model: ct.models.MLModel, prepared_image: Image.Image):
     predictions = model.predict({"image": prepared_image})
 
     ground_embedding = np.load("../notebooks/image_embed.npy")
@@ -133,7 +136,9 @@ def validate_image_encoder(model: ct.models.MLModel, prepared_image: np.ndarray)
     print(f"Feats S0: Max Diff: {s0_max_diff:.4f}, Avg Diff: {s0_avg_diff:.4f}")
     print(f"Feats S1: Max Diff: {s1_max_diff:.4f}, Avg Diff: {s1_avg_diff:.4f}")
 
-    assert np.allclose(predictions["image_embedding"], ground_embedding, atol=2e1) #ERROR: 2e1
+    assert np.allclose(
+        predictions["image_embedding"], ground_embedding, atol=2e1
+    )  # ERROR: 2e1
     assert np.allclose(predictions["feats_s0"], ground_feats_s0, atol=5e-2)
     assert np.allclose(predictions["feats_s1"], ground_feats_s1, atol=6e-2)
 
@@ -237,17 +242,20 @@ def export_image_encoder(
     image = np.array(image.convert("RGB"))
     orig_hw = (image.shape[0], image.shape[1])
 
-    prepared_images = image_predictor._transforms(image)
-    prepared_images = prepared_images[None, ...].to("cpu")
+    prepared_image = image_predictor._transforms(image)
+    prepared_image = prepared_image[None, ...].to("cpu")
 
-    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor), prepared_images)
+    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor), prepared_image)
 
     output_path = os.path.join(output_dir, f"sam2_{variant.value}_image_encoder")
+
+    scale = 1 / (0.226 * 255.0)
+    bias = [-0.485 / (0.229), -0.456 / (0.224), -0.406 / (0.225)]
 
     mlmodel = ct.convert(
         traced_model,
         inputs=[
-            ct.TensorType(name="image", shape=(1, 3, 1024, 1024)),
+            ct.ImageType(name="image", shape=(1, 3, SAM2_HW[0], SAM2_HW[1]), scale=scale, bias=bias)
         ],
         outputs=[
             ct.TensorType(name="image_embedding"),
@@ -260,7 +268,9 @@ def export_image_encoder(
     )
 
     if variant == SAM2Variant.Small:
-        validate_image_encoder(mlmodel, prepared_images)
+        image = Image.open("../notebooks/images/truck.jpg")
+        image = image.resize(SAM2_HW, Resampling.BILINEAR)
+        validate_image_encoder(mlmodel, image)
 
     mlmodel.save(output_path + ".mlpackage")
     return orig_hw
@@ -362,7 +372,6 @@ def export_mask_decoder(
         compute_precision=precision,
     )
 
-
     if variant == SAM2Variant.Small:
         image_embedding = np.load("../notebooks/image_embed.npy")
         sparse_embedding = np.load("../notebooks/sparse_embeddings.npy")
@@ -397,11 +406,23 @@ def export(
         img_predictor = SAM2ImagePredictor(model)
         img_predictor.model.eval()
 
-        orig_hw = export_image_encoder(img_predictor, variant, output_dir, min_target, compute_units, precision)
-        export_prompt_encoder(
-          img_predictor, variant, points, labels, orig_hw, output_dir, min_target, compute_units, precision
+        orig_hw = export_image_encoder(
+            img_predictor, variant, output_dir, min_target, compute_units, precision
         )
-        export_mask_decoder(img_predictor, variant, output_dir, min_target, compute_units, precision)
+        export_prompt_encoder(
+            img_predictor,
+            variant,
+            points,
+            labels,
+            orig_hw,
+            output_dir,
+            min_target,
+            compute_units,
+            precision,
+        )
+        export_mask_decoder(
+            img_predictor, variant, output_dir, min_target, compute_units, precision
+        )
 
 
 if __name__ == "__main__":
