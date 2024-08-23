@@ -7,7 +7,6 @@ import numpy as np
 from PIL import Image
 from PIL.Image import Resampling
 
-from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 import coremltools as ct
@@ -16,7 +15,7 @@ from coremltools import ComputeUnit
 from coremltools.converters.mil.mil.passes.defs.quantization import ComputePrecision
 from coremltools.converters.mil import register_torch_op
 from coremltools.converters.mil.mil import Builder as mb
-from .sam2_coreml import SAM2Variant
+from sam2_coreml import SAM2Variant
 
 SAM2_HW = (1024, 1024)
 
@@ -231,7 +230,7 @@ def export_image_encoder(
     prepared_image = image_predictor._transforms(image)
     prepared_image = prepared_image[None, ...].to("cpu")
 
-    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor), prepared_image)
+    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor).eval(), prepared_image)
 
     output_path = os.path.join(output_dir, f"sam2_{variant.value}_image_encoder")
 
@@ -384,12 +383,10 @@ def export(
     device = torch.device("cpu")
 
     # Build SAM2 model
-    sam2_checkpoint = f"../checkpoints/sam2_hiera_{variant.value}.pt"
-    model_cfg = variant.cfg()
+    sam2_checkpoint = f"facebook/sam2-hiera-{variant.value}"
 
     with torch.no_grad():
-        model = build_sam2(model_cfg, sam2_checkpoint, device=device)
-        img_predictor = SAM2ImagePredictor(model)
+        img_predictor = SAM2ImagePredictor.from_pretrained(sam2_checkpoint, device=device)
         img_predictor.model.eval()
 
         orig_hw = export_image_encoder(
