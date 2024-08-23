@@ -15,7 +15,7 @@ from coremltools import ComputeUnit
 from coremltools.converters.mil.mil.passes.defs.quantization import ComputePrecision
 from coremltools.converters.mil import register_torch_op
 from coremltools.converters.mil.mil import Builder as mb
-from .sam2_coreml import SAM2Variant
+from sam2_coreml import SAM2Variant
 
 SAM2_HW = (1024, 1024)
 
