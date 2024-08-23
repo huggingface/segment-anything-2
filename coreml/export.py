@@ -230,7 +230,7 @@ def export_image_encoder(
     prepared_image = image_predictor._transforms(image)
     prepared_image = prepared_image[None, ...].to("cpu")
 
-    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor), prepared_image)
+    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor).eval(), prepared_image)
 
     output_path = os.path.join(output_dir, f"sam2_{variant.value}_image_encoder")
 
