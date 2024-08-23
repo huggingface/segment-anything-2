@@ -7,7 +7,6 @@ import numpy as np
 from PIL import Image
 from PIL.Image import Resampling
 
-from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 import coremltools as ct
@@ -384,12 +383,10 @@ def export(
     device = torch.device("cpu")
 
     # Build SAM2 model
-    sam2_checkpoint = f"../checkpoints/sam2_hiera_{variant.value}.pt"
-    model_cfg = variant.cfg()
+    sam2_checkpoint = f"facebook/sam2-hiera-{variant.value}"
 
     with torch.no_grad():
-        model = build_sam2(model_cfg, sam2_checkpoint, device=device)
-        img_predictor = SAM2ImagePredictor(model)
+        img_predictor = SAM2ImagePredictor.from_pretrained(sam2_checkpoint, device=device)
         img_predictor.model.eval()
 
         orig_hw = export_image_encoder(

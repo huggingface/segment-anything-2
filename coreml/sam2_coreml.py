@@ -12,13 +12,6 @@ class SAM2Variant(enum.Enum):
     BasePlus = "base_plus"
     Large = "large"
 
-    def cfg(self):
-        match self:
-            case SAM2Variant.BasePlus:
-                return "sam2_hiera_b+.yaml"
-            case _:
-                return f"sam2_hiera_{self.value[0]}.yaml"
-
 
 class SAM2CoreMLPredictor:
     def __init__(
