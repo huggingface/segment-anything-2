@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 from sam2_coreml import SAM2CoreMLPredictor, show_masks, SAM2Variant
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="SAM2 CoreML CLI")
     parser.add_argument(

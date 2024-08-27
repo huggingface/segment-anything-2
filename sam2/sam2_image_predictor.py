@@ -489,12 +489,6 @@ class SAM2ImagePredictor:
             masks=mask_input,
         )
 
-        if os.environ.get("SERIALIZE_GROUND", False):
-            sparse_embeddings_np = sparse_embeddings.cpu().numpy()
-            dense_embeddings_np = dense_embeddings.cpu().numpy()
-            np.save("sparse_embeddings.npy", sparse_embeddings_np)
-            np.save("dense_embeddings.npy", dense_embeddings_np)
-
         # Predict masks
         batched_mode = (
             concat_points is not None and concat_points[0].shape[0] > 1

@@ -19,6 +19,7 @@ from sam2_coreml import SAM2Variant
 
 SAM2_HW = (1024, 1024)
 
+
 def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
@@ -37,7 +38,11 @@ def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "--points",
         type=str,
         help="List of 2D points, e.g., '[[10,20], [30,40]]'",
-        required=True,
+    )
+    parser.add_argument(
+        "--boxes",
+        type=str,
+        help="List of 2D bounding boxes, e.g., '[[10,20,30,40], [50,60,70,80]]'",
     )
     parser.add_argument(
         "--labels",
@@ -99,12 +104,23 @@ class SAM2ImageEncoder(torch.nn.Module):
         return img_embedding, feats_s0, feats_s1
 
 
-def validate_image_encoder(model: ct.models.MLModel, prepared_image: Image.Image):
+def validate_image_encoder(
+    model: ct.models.MLModel, ground_model: SAM2ImagePredictor, image: Image.Image
+):
+    prepared_image = image.resize(SAM2_HW, Resampling.BILINEAR)
     predictions = model.predict({"image": prepared_image})
 
-    ground_embedding = np.load("../notebooks/image_embed.npy")
-    ground_feats_s0 = np.load("../notebooks/feats_s0.npy")
-    ground_feats_s1 = np.load("../notebooks/feats_s1.npy")
+    image = np.array(image.convert("RGB"))
+    tch_image = ground_model._transforms(image)
+    tch_image = tch_image[None, ...].to("cpu")
+    ground_embedding, ground_feats_s0, ground_feats_s1 = ground_model.encode_image_raw(
+        tch_image
+    )
+    ground_embedding, ground_feats_s0, ground_feats_s1 = (
+        ground_embedding.numpy(),
+        ground_feats_s0.numpy(),
+        ground_feats_s1.numpy(),
+    )
 
     img_max_diff = np.max(np.abs(predictions["image_embedding"] - ground_embedding))
     img_avg_diff = np.mean(np.abs(predictions["image_embedding"] - ground_embedding))
@@ -128,11 +144,14 @@ def validate_image_encoder(model: ct.models.MLModel, prepared_image: Image.Image
     assert np.allclose(predictions["feats_s1"], ground_feats_s1, atol=6e-2)
 
 
-def validate_prompt_encoder(model: ct.models.MLModel, points, labels):
-    predictions = model.predict({"points": points, "labels": labels})
+def validate_prompt_encoder(
+    model: ct.models.MLModel, ground_model: SAM2ImagePredictor, unnorm_coords, labels
+):
+    predictions = model.predict({"points": unnorm_coords, "labels": labels})
 
-    ground_sparse = np.load("../notebooks/sparse_embeddings.npy")
-    ground_dense = np.load("../notebooks/dense_embeddings.npy")
+    (ground_sparse, ground_dense) = ground_model.encode_points_raw(
+        unnorm_coords, labels
+    )
 
     sparse_max_diff = np.max(np.abs(predictions["sparse_embeddings"] - ground_sparse))
     sparse_avg_diff = np.mean(np.abs(predictions["sparse_embeddings"] - ground_sparse))
@@ -157,6 +176,7 @@ def validate_prompt_encoder(model: ct.models.MLModel, points, labels):
 
 def validate_mask_decoder(
     model: ct.models.MLModel,
+    ground_model: SAM2ImagePredictor,
     image_embedding,
     sparse_embedding,
     dense_embedding,
@@ -173,8 +193,9 @@ def validate_mask_decoder(
         }
     )
 
-    ground_masks = np.load("../notebooks/low_res_masks.npy")
-    print("Ground shape: ", ground_masks.shape)
+    ground_masks = ground_model.decode_masks_raw(
+        image_embedding, sparse_embedding, dense_embedding, [feats_s0, feats_s1]
+    )
 
     masks_max_diff = np.max(np.abs(predictions["low_res_masks"] - ground_masks))
     masks_avg_diff = np.mean(np.abs(predictions["low_res_masks"] - ground_masks))
@@ -230,7 +251,9 @@ def export_image_encoder(
     prepared_image = image_predictor._transforms(image)
     prepared_image = prepared_image[None, ...].to("cpu")
 
-    traced_model = torch.jit.trace(SAM2ImageEncoder(image_predictor).eval(), prepared_image)
+    traced_model = torch.jit.trace(
+        SAM2ImageEncoder(image_predictor).eval(), prepared_image
+    )
 
     output_path = os.path.join(output_dir, f"sam2_{variant.value}_image_encoder")
 
@@ -240,7 +263,12 @@ def export_image_encoder(
     mlmodel = ct.convert(
         traced_model,
         inputs=[
-            ct.ImageType(name="image", shape=(1, 3, SAM2_HW[0], SAM2_HW[1]), scale=scale, bias=bias)
+            ct.ImageType(
+                name="image",
+                shape=(1, 3, SAM2_HW[0], SAM2_HW[1]),
+                scale=scale,
+                bias=bias,
+            )
         ],
         outputs=[
             ct.TensorType(name="image_embedding"),
@@ -252,10 +280,8 @@ def export_image_encoder(
         compute_precision=precision,
     )
 
-    if variant == SAM2Variant.Small:
-        image = Image.open("../notebooks/images/truck.jpg")
-        image = image.resize(SAM2_HW, Resampling.BILINEAR)
-        validate_image_encoder(mlmodel, image)
+    image = Image.open("../notebooks/images/truck.jpg")
+    validate_image_encoder(mlmodel, image_predictor, image)
 
     mlmodel.save(output_path + ".mlpackage")
     return orig_hw
@@ -386,7 +412,9 @@ def export(
     sam2_checkpoint = f"facebook/sam2-hiera-{variant.value}"
 
     with torch.no_grad():
-        img_predictor = SAM2ImagePredictor.from_pretrained(sam2_checkpoint, device=device)
+        img_predictor = SAM2ImagePredictor.from_pretrained(
+            sam2_checkpoint, device=device
+        )
         img_predictor.model.eval()
 
         orig_hw = export_image_encoder(

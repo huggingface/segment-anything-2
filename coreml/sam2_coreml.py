@@ -6,6 +6,7 @@ import torch
 import matplotlib.pyplot as plt
 import enum
 
+
 class SAM2Variant(enum.Enum):
     Tiny = "tiny"
     Small = "small"
@@ -32,7 +33,7 @@ class SAM2CoreMLPredictor:
             max_sprinkle_area=max_sprinkle_area,
         )
         self.mask_threshold = mask_threshold
-        self.orig_hw = None 
+        self.orig_hw = None
         self.load_models()
 
     def load_models(self):
@@ -70,7 +71,7 @@ class SAM2CoreMLPredictor:
 
     def load_image(self, image_path):
         image = Image.open(image_path)
-        self.orig_hw = image.size[::-1] 
+        self.orig_hw = image.size[::-1]
 
         image = image.resize(self.input_hw, Image.Resampling.BILINEAR)
         return image
