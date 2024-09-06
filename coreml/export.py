@@ -152,6 +152,8 @@ def validate_prompt_encoder(
         unnorm_coords, labels
     )
 
+    ground_sparse = ground_sparse.numpy()
+    ground_dense = ground_dense.numpy()
     sparse_max_diff = np.max(np.abs(predictions["sparse_embeddings"] - ground_sparse))
     sparse_avg_diff = np.mean(np.abs(predictions["sparse_embeddings"] - ground_sparse))
 
@@ -196,6 +198,7 @@ def validate_mask_decoder(
         image_embedding, sparse_embedding, dense_embedding, [feats_s0, feats_s1]
     )
 
+    ground_masks = ground_masks.numpy()
     masks_max_diff = np.max(np.abs(predictions["low_res_masks"] - ground_masks))
     masks_avg_diff = np.mean(np.abs(predictions["low_res_masks"] - ground_masks))
 
@@ -333,7 +336,7 @@ def export_points_prompt_encoder(
         compute_precision=precision,
     )
 
-    validate_prompt_encoder(mlmodel, unnorm_coords, labels)
+    validate_prompt_encoder(mlmodel, image_predictor, unnorm_coords, labels)
 
     mlmodel.save(output_path + ".mlpackage")
 
