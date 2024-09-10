@@ -194,7 +194,7 @@ def validate_mask_decoder(
         }
     )
 
-    ground_masks = ground_model.decode_masks_raw(
+    ground_masks, scores = ground_model.decode_masks_raw(
         image_embedding, sparse_embedding, dense_embedding, [feats_s0, feats_s1]
     )
 
@@ -209,6 +209,7 @@ def validate_mask_decoder(
     )
 
     assert np.allclose(predictions["low_res_masks"], ground_masks, atol=7e-2)
+    print(f"Scores: {predictions['scores']}, ground: {scores}")
 
 
 class SAM2PointsEncoder(torch.nn.Module):
@@ -231,10 +232,10 @@ class SAM2MaskDecoder(torch.nn.Module):
     def forward(
         self, image_embedding, sparse_embedding, dense_embedding, feats_s0, feats_s1
     ):
-        low_res_masks = self.model.decode_masks_raw(
+        low_res_masks, iou_scores = self.model.decode_masks_raw(
             image_embedding, sparse_embedding, dense_embedding, [feats_s0, feats_s1]
         )
-        return low_res_masks
+        return low_res_masks, iou_scores
 
 
 def export_image_encoder(
@@ -378,6 +379,7 @@ def export_mask_decoder(
         ],
         outputs=[
             ct.TensorType(name="low_res_masks"),
+            ct.TensorType(name="scores"),
         ],
         minimum_deployment_target=min_target,
         compute_units=compute_units,
