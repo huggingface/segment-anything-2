@@ -198,7 +198,7 @@ class SAM2ImagePredictor:
                 if param.requires_grad:
                     param.requires_grad = False
 
-            low_res_masks, _, _, _ = self.model.sam_mask_decoder(
+            low_res_masks, iou_scores, _, _ = self.model.sam_mask_decoder(
                 image_embeddings=image_embeddings,
                 image_pe=self.model.sam_prompt_encoder.get_dense_pe(),
                 sparse_prompt_embeddings=sparse_embedding,
@@ -207,7 +207,7 @@ class SAM2ImagePredictor:
                 repeat_image=batched_mode,
                 high_res_features=high_res_features,
             )
-            return low_res_masks
+            return low_res_masks, iou_scores
 
     @torch.no_grad()
     def set_image_batch(
