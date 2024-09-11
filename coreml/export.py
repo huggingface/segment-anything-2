@@ -1,13 +1,13 @@
 import argparse
 import os
-import ast
-import torch
+import enum
 from typing import List, Optional, Tuple
+import ast
+
+import torch
 import numpy as np
 from PIL import Image
 from PIL.Image import Resampling 
-
-from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 import coremltools as ct
 from coremltools.converters.mil._deployment_compatibility import AvailableTarget
@@ -15,7 +15,14 @@ from coremltools import ComputeUnit
 from coremltools.converters.mil.mil.passes.defs.quantization import ComputePrecision
 from coremltools.converters.mil import register_torch_op
 from coremltools.converters.mil.mil import Builder as mb
-from sam2_coreml import SAM2Variant
+
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+class SAM2Variant(enum.Enum):
+    Tiny = "tiny"
+    Small = "small"
+    BasePlus = "base_plus"
+    Large = "large"
 
 SAM2_HW = (1024, 1024)
 
