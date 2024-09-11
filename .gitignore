@@ -10,3 +10,4 @@ outputs/*
 checkpoints/*.pt
 **/*.mlpackage
 **/*.npy
+.python-version

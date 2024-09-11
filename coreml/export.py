@@ -5,7 +5,7 @@ import torch
 from typing import List, Optional, Tuple
 import numpy as np
 from PIL import Image
-from PIL.Image import Resampling
+from PIL.Image import Resampling 
 
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
@@ -18,7 +18,6 @@ from coremltools.converters.mil.mil import Builder as mb
 from sam2_coreml import SAM2Variant
 
 SAM2_HW = (1024, 1024)
-
 
 def parse_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
@@ -136,6 +135,7 @@ def validate_image_encoder(
     print(f"Feats S0: Max Diff: {s0_max_diff:.4f}, Avg Diff: {s0_avg_diff:.4f}")
     print(f"Feats S1: Max Diff: {s1_max_diff:.4f}, Avg Diff: {s1_avg_diff:.4f}")
 
+    # Lack of bicubic upsampling in CoreML causes slight differences
     # assert np.allclose(
     #    predictions["image_embedding"], ground_embedding, atol=2e1
     # )
@@ -183,6 +183,7 @@ def validate_mask_decoder(
     dense_embedding,
     feats_s0,
     feats_s1,
+    precision: ComputePrecision,
 ):
     predictions = model.predict(
         {
@@ -208,7 +209,8 @@ def validate_mask_decoder(
         )
     )
 
-    assert np.allclose(predictions["low_res_masks"], ground_masks, atol=7e-2)
+    atol = 7e-2 if precision == ComputePrecision.FLOAT32 else 3e-1
+    assert np.allclose(predictions["low_res_masks"], ground_masks, atol=atol)
     print(f"Scores: {predictions['scores']}, ground: {scores}")
 
 
@@ -258,7 +260,6 @@ def export_image_encoder(
         SAM2ImageEncoder(image_predictor).eval(), prepared_image
     )
 
-    output_path = os.path.join(output_dir, f"sam2_{variant.value}_image_encoder")
 
     scale = 1 / (0.226 * 255.0)
     bias = [-0.485 / (0.229), -0.456 / (0.224), -0.406 / (0.225)]
@@ -286,6 +287,7 @@ def export_image_encoder(
     image = Image.open("../notebooks/images/truck.jpg")
     validate_image_encoder(mlmodel, image_predictor, image)
 
+    output_path = os.path.join(output_dir, f"SAM2{variant.value.capitalize()}ImageEncoder{precision.value.upper()}")
     mlmodel.save(output_path + ".mlpackage")
     return orig_hw
 
@@ -317,7 +319,6 @@ def export_points_prompt_encoder(
         SAM2PointsEncoder(image_predictor), (unnorm_coords, labels)
     )
 
-    output_path = os.path.join(output_dir, f"sam2_{variant.value}_prompt_encoder")
 
     points_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16), 2))
     labels_shape = ct.Shape(shape=(1, ct.RangeDim(lower_bound=1, upper_bound=16)))
@@ -339,6 +340,7 @@ def export_points_prompt_encoder(
 
     validate_prompt_encoder(mlmodel, image_predictor, unnorm_coords, labels)
 
+    output_path = os.path.join(output_dir, f"SAM2{variant.value.capitalize()}PromptEncoder{precision.value.upper()}")
     mlmodel.save(output_path + ".mlpackage")
 
 
@@ -363,7 +365,6 @@ def export_mask_decoder(
     )
     traced_model.eval()
 
-    output_path = os.path.join(output_dir, f"sam2_{variant.value}_mask_decoder")
 
     mlmodel = ct.convert(
         traced_model,
@@ -394,8 +395,10 @@ def export_mask_decoder(
         dense_embedding,
         s0,
         s1,
+        precision,
     )
 
+    output_path = os.path.join(output_dir, f"SAM2{variant.value.capitalize()}MaskDecoder{precision.value.upper()}")
     mlmodel.save(output_path + ".mlpackage")
 
 
