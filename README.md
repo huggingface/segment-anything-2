@@ -19,7 +19,7 @@ Next you can run the handy export script to convert the model to CoreML:
 ```python
 python3 export.py --points '[[500,375]]' --labels '[1]' --variant Small --precision FLOAT16
 ```
-For an integrated experience, you can also use [SAM2 Studio](https://githubg.com/huggingface/sam2-swiftui), a native MacOS app that allows you to quickly segment images. 
+For an integrated experience, you can also use [SAM2 Studio](https://github.com/huggingface/sam2-swiftui), a native MacOS app that allows you to quickly segment images. 
 
 > Note ⚠️: The CoreML conversion currently only supports image segmentation tasks. Video segmentation support is in development.
 ---
