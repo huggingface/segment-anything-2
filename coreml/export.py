@@ -299,7 +299,7 @@ def export_image_encoder(
     image = Image.open("../notebooks/images/truck.jpg")
     validate_image_encoder(mlmodel, image_predictor, image)
 
-    output_path = os.path.join(output_dir, f"SAM2{variant.fmt()}ImageEncoder{precision.value.upper()}")
+    output_path = os.path.join(output_dir, f"SAM2.1{variant.fmt()}ImageEncoder{precision.value.upper()}")
     mlmodel.save(output_path + ".mlpackage")
     return orig_hw
 
