@@ -22,6 +22,8 @@ python3 export.py --points '[[500,375]]' --labels '[1]' --variant Small --precis
 ```
 For an integrated experience, you can also use [SAM2 Studio](https://github.com/huggingface/sam2-studio), a native MacOS app that allows you to quickly segment images. 
 
+![UI Screenshot](https://github.com/huggingface/sam2-studio/blob/main/screenshot.png?raw=true)
+
 > Note ⚠️: The CoreML conversion currently only supports image segmentation tasks. Video segmentation support is in development.
 ---
 
