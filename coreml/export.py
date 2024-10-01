@@ -432,7 +432,7 @@ def export(
     device = torch.device("cpu")
 
     # Build SAM2 model
-    sam2_checkpoint = f"facebook/sam2-hiera-{variant.value}"
+    sam2_checkpoint = f"facebook/sam2.1-hiera-{variant.value}"
 
     with torch.no_grad():
         img_predictor = SAM2ImagePredictor.from_pretrained(
