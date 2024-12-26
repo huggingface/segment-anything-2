@@ -6,6 +6,7 @@
 
 import warnings
 from collections import OrderedDict
+from typing import Tuple, List, Optional
 
 import torch
 
@@ -1170,3 +1171,237 @@ class SAM2VideoPredictor(SAM2Base):
             non_cond_frame_outputs.pop(t, None)
             for obj_output_dict in inference_state["output_dict_per_obj"].values():
                 obj_output_dict["non_cond_frame_outputs"].pop(t, None)
+
+    @torch.no_grad()
+    def encode_video_raw(self, prepared_video: torch.Tensor):
+        """
+        Encode a sequence of frames into video embeddings and memory features using dynamically
+        obtained feature sizes rather than a hardcoded _bb_feat_sizes.
+
+        Arguments:
+            prepared_video (torch.Tensor): Video tensor of shape [T, 3, H, W].
+
+        Returns:
+            (image_embed, memory_embed, feats_s0, feats_s1)
+        """
+        self.eval()
+        device = self.device
+        prepared_video = prepared_video.to(device)
+        T = prepared_video.shape[0]
+
+        last_backbone_out = None
+        for t in range(T):
+            frame = prepared_video[t: t + 1]  # shape: [1, 3, H, W]
+            backbone_out = self.forward_image(frame)
+            # Store the last frame's backbone output
+            last_backbone_out = backbone_out
+
+        # Prepare features from the last frame
+        # Note: _prepare_backbone_features returns (backbone_out, vision_feats, vision_pos_embeds, feat_sizes)
+        _, vision_feats, _, feat_sizes = self._prepare_backbone_features(last_backbone_out)
+
+        # If we need to add the no_mem_embed
+        if self.directly_add_no_mem_embed:
+            vision_feats[-1] = vision_feats[-1] + self.no_mem_embed
+
+        # Convert vision_feats into feature tensors (similar to the image code)
+        # Here, feat_sizes correspond exactly to vision_feats in order:
+        # Each vision_feat: [HW, B, C]
+        # We reshape them back to [B, C, H, W].
+        # Then permute and view them as 1x(-1)xH'xW' if needed.
+        feats = []
+        for feat, (H, W) in zip(vision_feats[::-1], feat_sizes[::-1]):
+            # feat: [HW, B, C] => [B, C, H, W]
+            B = feat.size(1)
+            C = feat.size(2)
+            feat_reshaped = feat.permute(1, 2, 0).view(B, C, H, W)
+            # For encoding, we want [1, -1, H, W] format similar to image model
+            feats.append(feat_reshaped)
+        feats = feats[::-1]  # reverse back to original order
+
+        # Assuming use_high_res_features_in_sam=True for multiple feature levels,
+        # feats might be [feats_s0, feats_s1, image_embed] or similar:
+        # Typically, SAM uses the last feature as image embedding and previous ones as hi-res feats.
+        # For example, if num_feature_levels=3, feats = [feats_s0, feats_s1, image_embed].
+        # Adjust the indexing based on how many levels you have.
+        image_embed = feats[-1]
+        high_res_feats = feats[:-1]
+
+        # If using high-res features, we expect something like two high-res levels:
+        # feats_s0, feats_s1 = high_res_feats
+        # If you only have one level, adjust accordingly.
+        # Assuming the same configuration as the image model:
+        if len(high_res_feats) >= 2:
+            feats_s0, feats_s1 = high_res_feats[0], high_res_feats[1]
+        else:
+            # If there's only one level, you might need to handle that scenario differently
+            # or ensure that your model uses multiple feature levels.
+            raise RuntimeError(
+                "Not enough feature levels to produce feats_s0, feats_s1. "
+                "Check your model configuration."
+            )
+
+        # Create a dummy memory_embed or compute a proper memory if your model supports it.
+        memory_embed = torch.zeros_like(image_embed)
+
+        return image_embed, memory_embed, feats_s0, feats_s1
+
+    @torch.no_grad()
+    def decode_masks_video_raw(
+            self,
+            video_embeddings: torch.Tensor,
+            memory_embeddings: torch.Tensor,
+            sparse_embedding: torch.Tensor,
+            dense_embedding: torch.Tensor,
+            high_res_features: List[torch.Tensor],
+            multimask_output: bool = True,
+            batched_mode: bool = False,
+    ):
+        """
+        Decode masks for a video given embeddings and prompts.
+
+        Args:
+            video_embeddings (torch.Tensor): The video embedding, shape [1, C, H', W'].
+            memory_embeddings (torch.Tensor): The memory features for the video, shape [1, C, H', W'].
+            sparse_embedding (torch.Tensor): Sparse prompt embeddings.
+            dense_embedding (torch.Tensor): Dense prompt embeddings.
+            high_res_features (List[torch.Tensor]): High-resolution feature maps [feats_s0, feats_s1].
+            multimask_output (bool): If True, produce multiple masks.
+            batched_mode (bool): If True, treats input as a batch.
+
+        Returns:
+            low_res_masks (torch.Tensor): [1, num_masks, 256, 256] low-resolution masks.
+            iou_scores (torch.Tensor): [1, num_masks] IoU scores.
+        """
+        self.eval()
+        with torch.no_grad():
+            for _, param in self.sam_mask_decoder.named_parameters():
+                if param.requires_grad:
+                    param.requires_grad = False
+
+            # If your mask decoder accepts memory_embeddings separately, you need to integrate it.
+            # If it does not, and memory is already integrated into video_embeddings, skip it.
+            # For illustration, assume we concatenate memory_embeddings with video_embeddings along channel dim.
+            combined_embeddings = video_embeddings
+            if memory_embeddings is not None:
+                # Example of combining embeddings:
+                combined_embeddings = torch.cat([video_embeddings, memory_embeddings], dim=1)
+
+            low_res_masks, iou_scores, _, _ = self.sam_mask_decoder(
+                image_embeddings=combined_embeddings,
+                image_pe=self.sam_prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embedding,
+                dense_prompt_embeddings=dense_embedding,
+                multimask_output=multimask_output,
+                repeat_image=batched_mode,
+                high_res_features=high_res_features,
+            )
+
+            return low_res_masks, iou_scores
+
+    @torch.no_grad()
+    def encode_points_raw_for_video(
+            self, unnorm_coords: torch.Tensor, labels: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode point prompts for video. If identical to image, just reuse the logic.
+
+        Args:
+            unnorm_coords (torch.Tensor): [1, N, 2] normalized coordinates
+            labels (torch.Tensor): [1, N] labels for each point.
+
+        Returns:
+            sparse_embeddings (torch.Tensor): [1, N, C]
+            dense_embeddings (torch.Tensor): [1, C, H', W']
+        """
+        self.eval()
+        for _, param in self.named_parameters():
+            if param.requires_grad:
+                param.requires_grad = False
+
+        sparse_embeddings, dense_embeddings = self.sam_prompt_encoder.points_only(
+            points=(unnorm_coords, labels)
+        )
+        return sparse_embeddings, dense_embeddings
+
+    def encode_points_raw(self, points: torch.Tensor, labels: torch.Tensor):
+        return self.encode_points_raw_for_video(points, labels)
+
+    def get_conditioned_embedding(
+            self,
+            video_embedding: torch.Tensor,
+            memory_embedding: Optional[torch.Tensor],
+            sparse_embedding: torch.Tensor,
+            dense_embedding: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Produce a memory-conditioned embedding suitable for the mask decoder.
+        This method:
+        1. Prepares memory conditioning inputs (memory frames, pos embeddings, etc.)
+        2. Runs memory attention to fuse video_embedding and memory_embedding.
+        3. Returns the conditioned embedding (still 256 channels).
+
+        Args:
+            video_embedding (torch.Tensor): [B, 256, H', W'] current frame embedding.
+            memory_embedding (torch.Tensor or None): [B, 256, H', W'] memory embedding if available.
+            sparse_embedding (torch.Tensor): [B, N, 256] sparse prompt embeddings (not used directly in this step).
+            dense_embedding (torch.Tensor): [B, 256, H', W'] dense prompt embeddings (not used directly in this step).
+
+        Returns:
+            torch.Tensor: [B, 256, H', W'] memory-conditioned embedding.
+        """
+        B, C, H, W = video_embedding.shape
+        device = video_embedding.device
+
+        # Step 1: Prepare positional encodings for the current frame
+        # Assuming you have vision_pos_enc from the image encoder as in SAM2Base
+        # If you don't have it readily available, you must ensure that you have
+        # positional encodings for the current frame. We'll create a placeholder here.
+        # In SAM2Base, these come from forward_image(...) -> _prepare_backbone_features.
+        # For a standalone method, you could store them or recompute them.
+        # Here we just assume you have them in self.current_vision_pos_embeds
+        current_vision_feats = [video_embedding.flatten(2).permute(2, 0, 1)]  # [HW, B, C]
+        current_vision_pos_embeds = [torch.zeros(H * W, B, C, device=device)]  # placeholder
+        feat_sizes = [(H, W)]
+
+        # Step 2: Prepare memory tokens
+        # Memory attention takes "memory" and "memory_pos" as inputs.
+        # If memory_embedding is given, treat it as memory features.
+        # If you have temporal pos enc, apply them here.
+        if memory_embedding is not None:
+            memory = memory_embedding.flatten(2).permute(2, 0, 1)  # [HW, B, C]
+            # Positional encodings for memory, if needed:
+            memory_pos = torch.zeros_like(memory)  # [HW, B, C], placeholder
+            to_cat_memory = [memory]
+            to_cat_memory_pos = [memory_pos]
+        else:
+            # If there's no memory, you can simulate a "no_mem_embed" token:
+            no_mem_embed = torch.zeros(1, B, C, device=device)
+            no_mem_pos_enc = torch.zeros(1, B, C, device=device)
+            to_cat_memory = [no_mem_embed]
+            to_cat_memory_pos = [no_mem_pos_enc]
+
+        # Concatenate memory features
+        memory = torch.cat(to_cat_memory, dim=0)  # [mem_seq, B, C]
+        memory_pos = torch.cat(to_cat_memory_pos, dim=0)  # [mem_seq, B, C]
+
+        # Step 3: Run memory attention
+        # In SAM2Base, memory_attention is used to fuse current_vision_feats with memory.
+        # memory_attention typically expects lists of features at different scales.
+        # Here we assume a single scale for simplicity.
+        pix_feat_with_mem = self.memory_attention(
+            curr=current_vision_feats,
+            curr_pos=current_vision_pos_embeds,
+            memory=memory,
+            memory_pos=memory_pos,
+            num_obj_ptr_tokens=0,  # if you have object pointers, adjust here
+        )
+        # pix_feat_with_mem: [HW, B, C]
+        pix_feat_with_mem = pix_feat_with_mem.permute(1, 2, 0).view(B, C, H, W)
+
+        # Now pix_feat_with_mem is a memory-conditioned embedding at [B, 256, H, W].
+
+        # We do not combine sparse_embedding or dense_embedding here.
+        # They will be provided directly to the mask decoder's forward pass.
+
+        return pix_feat_with_mem
