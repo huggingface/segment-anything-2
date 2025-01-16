@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
 
-from sam2.modeling.position_encoding import apply_rotary_enc, compute_axial_cis
+from sam2.modeling.position_encoding import apply_rotary_enc, compute_axial_cis, compute_axial_cis_real
 from sam2.modeling.sam2_utils import MLP
 from sam2.utils.misc import get_sdpa_settings
 
@@ -301,11 +301,18 @@ class RoPEAttention(Attention):
     ):
         super().__init__(*args, **kwargs)
 
-        self.compute_cis = partial(
-            compute_axial_cis, dim=self.internal_dim // self.num_heads, theta=rope_theta
+        # self.compute_cis = partial(
+        #     compute_axial_cis, dim=self.internal_dim // self.num_heads, theta=rope_theta
+        # )
+        # freqs_cis = self.compute_cis(end_x=feat_sizes[0], end_y=feat_sizes[1])
+        # self.freqs_cis = freqs_cis
+        self.compute_freqs = partial(
+            compute_axial_cis_real,
+            dim=self.internal_dim // self.num_heads,
+            theta=rope_theta
         )
-        freqs_cis = self.compute_cis(end_x=feat_sizes[0], end_y=feat_sizes[1])
-        self.freqs_cis = freqs_cis
+        self.freqs_real, self.freqs_imag = self.compute_freqs(end_x=feat_sizes[0], end_y=feat_sizes[1])
+
         self.rope_k_repeat = rope_k_repeat
 
     def forward(
@@ -323,9 +330,15 @@ class RoPEAttention(Attention):
 
         # Apply rotary position encoding
         w = h = math.sqrt(q.shape[-2])
-        self.freqs_cis = self.freqs_cis.to(q.device)
-        if self.freqs_cis.shape[0] != q.shape[-2]:
-            self.freqs_cis = self.compute_cis(end_x=w, end_y=h).to(q.device)
+        freqs_real = self.freqs_real.to(q.device)
+        freqs_imag = self.freqs_imag.to(q.device)
+
+        # Recompute frequencies if shape doesn't match
+        if self.freqs_real.shape[0] != q.shape[-2]:
+            freqs_real, freqs_imag = self.compute_freqs(end_x=w, end_y=h)
+            freqs_real = freqs_real.to(q.device)
+            freqs_imag = freqs_imag.to(q.device)
+
         if q.shape[-2] != k.shape[-2]:
             assert self.rope_k_repeat
 
@@ -333,7 +346,8 @@ class RoPEAttention(Attention):
         q, k[:, :, :num_k_rope] = apply_rotary_enc(
             q,
             k[:, :, :num_k_rope],
-            freqs_cis=self.freqs_cis,
+            freqs_real=freqs_real,
+            freqs_imag=freqs_imag,
             repeat_freqs_k=self.rope_k_repeat,
         )
 
@@ -358,3 +372,41 @@ class RoPEAttention(Attention):
         out = self.out_proj(out)
 
         return out
+
+
+        # disabled: .to(device) op not implemented in CoreML
+        #self.freqs_cis = self.freqs_cis.to(q.device)
+        # if self.freqs_cis.shape[0] != q.shape[-2]:
+        #     self.freqs_cis = self.compute_cis(end_x=w, end_y=h).to(q.device)
+        # if q.shape[-2] != k.shape[-2]:
+        #     assert self.rope_k_repeat
+        #
+        # num_k_rope = k.size(-2) - num_k_exclude_rope
+        # q, k[:, :, :num_k_rope] = apply_rotary_enc(
+        #     q,
+        #     k[:, :, :num_k_rope],
+        #     freqs_cis=self.freqs_cis,
+        #     repeat_freqs_k=self.rope_k_repeat,
+        # )
+        #
+        # dropout_p = self.dropout_p if self.training else 0.0
+        # # Attention
+        # try:
+        #     with sdp_kernel_context(dropout_p):
+        #         out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        # except Exception as e:
+        #     # Fall back to all kernels if the Flash attention kernel fails
+        #     warnings.warn(
+        #         f"Flash Attention kernel failed due to: {e}\nFalling back to all available "
+        #         f"kernels for scaled_dot_product_attention (which may have a slower speed).",
+        #         category=UserWarning,
+        #         stacklevel=2,
+        #     )
+        #     global ALLOW_ALL_KERNELS
+        #     ALLOW_ALL_KERNELS = True
+        #     out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        #
+        # out = self._recombine_heads(out)
+        # out = self.out_proj(out)
+        #
+        # return out

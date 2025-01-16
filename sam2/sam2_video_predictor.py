@@ -6,6 +6,7 @@
 
 import warnings
 from collections import OrderedDict
+from typing import Tuple, List, Optional, Dict
 
 import torch
 
@@ -1170,3 +1171,54 @@ class SAM2VideoPredictor(SAM2Base):
             non_cond_frame_outputs.pop(t, None)
             for obj_output_dict in inference_state["output_dict_per_obj"].values():
                 obj_output_dict["non_cond_frame_outputs"].pop(t, None)
+
+    @torch.no_grad()
+    def encode_image_raw(self, prepared_image: torch.Tensor):
+        backbone_out = self.forward_image(prepared_image.float())
+        _, vision_feats, vision_pos_embeds, feat_sizes = self._prepare_backbone_features(backbone_out)
+
+        feats = [
+            feat.permute(1, 2, 0).view(1, -1, *feat_size)
+            for feat, feat_size in zip(vision_feats[::-1], feat_sizes[::-1])
+        ][::-1]
+        image_embed = feats[-1]
+        high_res_feats = feats[:-1]
+
+        feats_s0, feats_s1 = high_res_feats[0], high_res_feats[1]
+        return (image_embed, vision_feats, feats_s0, feats_s1, vision_pos_embeds)
+
+    @torch.no_grad()
+    def encode_memory_raw(
+            self,
+            pix_feat: torch.Tensor,
+            masks: torch.Tensor,
+            object_score_logits: Optional[torch.Tensor] = None,
+            is_mask_from_pts: bool = False
+    ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+        """Raw memory encoder without any preprocessing.
+
+        Args:
+            pix_feat: [B, C, H, W] pixel features from backbone
+            masks: [B, 1, H_full, W_full] mask inputs
+            object_score_logits: [B, 1] Optional object score logits
+            is_mask_from_pts: Whether mask comes from points
+
+        Returns:
+            Tuple containing:
+                - maskmem_features: [B, C, H, W] encoded memory features
+                - maskmem_pos_enc: List[Tensor] positional encodings
+        """
+        if object_score_logits is None:
+            # Default to object present (10.0) as in mask decoder
+            object_score_logits = torch.full((masks.shape[0], 1), 10.0,
+                                             dtype=torch.float32,
+                                             device=masks.device)
+
+        # TODO: there are additional operations in _encode_new_memory, maybe call this instead?
+        out = self.memory_encoder(
+            pix_feat=pix_feat,
+            masks=masks,
+            skip_mask_sigmoid=True,  # mask is already in format we want
+        )
+
+        return out["vision_features"], out["vision_pos_enc"]
