@@ -663,6 +663,7 @@ class SAM2Base(torch.nn.Module):
         memory = torch.cat(to_cat_memory, dim=0)
         memory_pos_embed = torch.cat(to_cat_memory_pos_embed, dim=0)
 
+        #print(f"Memory_attention shapes: {current_vision_feats[0].shape} {current_vision_pos_embeds[0].shape} {memory.shape}, {memory_pos_embed.shape}, {num_obj_ptr_tokens}")
         pix_feat_with_mem = self.memory_attention(
             curr=current_vision_feats,
             curr_pos=current_vision_pos_embeds,
