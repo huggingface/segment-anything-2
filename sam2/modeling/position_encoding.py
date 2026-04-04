@@ -182,6 +182,58 @@ def compute_axial_cis(dim: int, end_x: int, end_y: int, theta: float = 10000.0):
     freqs_cis_y = torch.polar(torch.ones_like(freqs_y), freqs_y)
     return torch.cat([freqs_cis_x, freqs_cis_y], dim=-1)
 
+def compute_axial_cis_real(dim: int, end_x: int, end_y: int, theta: float = 10000.0):
+    """
+    Compute RoPE positional encoding in real-valued form.
+
+    Args:
+        dim: Feature dimension (must be divisible by 4 as we work in pairs)
+        end_x: Width of feature map
+        end_y: Height of feature map
+        theta: RoPE base (default 10000.0)
+
+    Returns:
+        freqs_real: Real components of RoPE encoding, shape (end_x*end_y, dim)
+        freqs_imag: Imaginary components of RoPE encoding, shape (end_x*end_y, dim)
+    """
+
+    # Compute the freqs for x and y dimensions
+    freqs_x = 1.0 / (theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim))
+    freqs_y = 1.0 / (theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim))
+
+    # Get x,y coordinates
+    t = torch.arange(end_x * end_y, dtype=torch.float32)
+    t_x = (t % end_x).float()
+    t_y = torch.div(t, end_x, rounding_mode="floor").float()
+
+    # Outer products
+    freqs_x = torch.outer(t_x, freqs_x)  # (H*W, dim//4)
+    freqs_y = torch.outer(t_y, freqs_y)  # (H*W, dim//4)
+
+    # Calculate angles for x and y positions
+    angles_x = freqs_x
+    angles_y = freqs_y
+
+    # Calculate sin and cos for x and y
+    cos_x = torch.cos(angles_x)  # (H*W, dim//4)
+    sin_x = torch.sin(angles_x)
+    cos_y = torch.cos(angles_y)
+    sin_y = torch.sin(angles_y)
+
+    # Interleave x and y components to match original dimension
+    freqs_real = torch.zeros(int(end_x * end_y), dim // 2)
+    freqs_imag = torch.zeros(int(end_x * end_y), dim // 2)
+
+    # For x components (even indices)
+    freqs_real[:, 0::2] = cos_x
+    freqs_imag[:, 0::2] = sin_x
+
+    # For y components (odd indices)
+    freqs_real[:, 1::2] = cos_y
+    freqs_imag[:, 1::2] = sin_y
+
+    return freqs_real, freqs_imag
+
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
@@ -190,32 +242,86 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     shape = [d if i >= ndim - 2 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
 
+# def apply_rotary_enc(
+#     xq: torch.Tensor,
+#     xk: torch.Tensor,
+#     freqs_cis: torch.Tensor,
+#     repeat_freqs_k: bool = False,
+# ):
+#     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+#     xk_ = (
+#         torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+#         if xk.shape[-2] != 0
+#         else None
+#     )
+#     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
+#     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+#     if xk_ is None:
+#         # no keys to rotate, due to dropout
+#         return xq_out.type_as(xq).to(xq.device), xk
+#     # repeat freqs along seq_len dim to match k seq_len
+#     if repeat_freqs_k:
+#         r = xk_.shape[-2] // xq_.shape[-2]
+#         if freqs_cis.is_cuda:
+#             freqs_cis = freqs_cis.repeat(*([1] * (freqs_cis.ndim - 2)), r, 1)
+#         else:
+#             # torch.repeat on complex numbers may not be supported on non-CUDA devices
+#             # (freqs_cis has 4 dims and we repeat on dim 2) so we use expand + flatten
+#             freqs_cis = freqs_cis.unsqueeze(2).expand(-1, -1, r, -1, -1).flatten(2, 3)
+#     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+#     return xq_out.type_as(xq).to(xq.device), xk_out.type_as(xk).to(xk.device)
 
 def apply_rotary_enc(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: torch.Tensor,
-    repeat_freqs_k: bool = False,
+        xq: torch.Tensor,
+        xk: torch.Tensor,
+        freqs_real: torch.Tensor,
+        freqs_imag: torch.Tensor,
+        repeat_freqs_k: bool = False,
 ):
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = (
-        torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-        if xk.shape[-2] != 0
-        else None
-    )
-    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    if xk_ is None:
-        # no keys to rotate, due to dropout
-        return xq_out.type_as(xq).to(xq.device), xk
-    # repeat freqs along seq_len dim to match k seq_len
+    """
+    Apply RoPE to query and key tensors using real-valued arithmetic.
+
+    Args:
+        xq: Query tensor (..., n, dim)
+        xk: Key tensor (..., n, dim)
+        freqs_real: Real components of RoPE encoding (n, dim/2)
+        freqs_imag: Imaginary components of RoPE encoding (n, dim/2)
+        repeat_freqs_k: Whether to repeat freq encoding for keys
+
+    Returns:
+        q_out: Rotated query tensor
+        k_out: Rotated key tensor (if xk is not None)
+    """
+    # Reshape input tensors to expose pairs of features
+    xq_r, xq_i = xq.float().reshape(*xq.shape[:-1], -1, 2).unbind(-1)
+
+    # Reshape frequencies
+    freqs_r = freqs_real.reshape(*([1] * (xq.ndim - 2)), *freqs_real.shape)
+    freqs_i = freqs_imag.reshape(*([1] * (xq.ndim - 2)), *freqs_imag.shape)
+
+    # Apply rotation using real arithmetic:
+    # [cos(θ) -sin(θ)] [xr] = [xr*cos(θ) - xi*sin(θ)]
+    # [sin(θ)  cos(θ)] [xi]   [xr*sin(θ) + xi*cos(θ)]
+    xq_out_r = xq_r * freqs_r - xq_i * freqs_i
+    xq_out_i = xq_r * freqs_i + xq_i * freqs_r
+
+    # Stack real and imaginary components back together
+    xq_out = torch.stack([xq_out_r, xq_out_i], dim=-1).flatten(-2)
+
+    if xk is None or xk.shape[-2] == 0:
+        return xq_out, xk
+
+    # Apply same rotation to key tensor
+    xk_r, xk_i = xk.float().reshape(*xk.shape[:-1], -1, 2).unbind(-1)
+
     if repeat_freqs_k:
-        r = xk_.shape[-2] // xq_.shape[-2]
-        if freqs_cis.is_cuda:
-            freqs_cis = freqs_cis.repeat(*([1] * (freqs_cis.ndim - 2)), r, 1)
-        else:
-            # torch.repeat on complex numbers may not be supported on non-CUDA devices
-            # (freqs_cis has 4 dims and we repeat on dim 2) so we use expand + flatten
-            freqs_cis = freqs_cis.unsqueeze(2).expand(-1, -1, r, -1, -1).flatten(2, 3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+        # Repeat frequencies for key if needed
+        r = xk.shape[-2] // xq.shape[-2]
+        freqs_r = freqs_r.repeat(*([1] * (freqs_r.ndim - 2)), r, 1)
+        freqs_i = freqs_i.repeat(*([1] * (freqs_i.ndim - 2)), r, 1)
+
+    xk_out_r = xk_r * freqs_r - xk_i * freqs_i
+    xk_out_i = xk_r * freqs_i + xk_i * freqs_r
+    xk_out = torch.stack([xk_out_r, xk_out_i], dim=-1).flatten(-2)
+
     return xq_out.type_as(xq).to(xq.device), xk_out.type_as(xk).to(xk.device)
